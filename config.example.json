@@ -1,0 +1,86 @@
+{
+  "_": "Configurazione di claude-code-monitor. Copia questo file in config.json e modificalo: config.json e' ignorato da git, cosi' i tuoi dati restano tuoi. Se manca o e' illeggibile il tool riparte dai default integrati senza fermarsi. Tutto e' modificabile anche dal pannello: pulsante 'Configura' nella GUI.",
+  "updated": "2026-01-01",
+
+  "_billing": "COME PAGHI. 'subscription' = quota fissa mensile (Claude Pro/Max): il costo per token e' solo un riferimento, quello che paghi e' la quota. 'api' = a consumo: il costo per token E' l'addebito. Puoi anche marcare singoli progetti o sessioni come API pur restando in abbonamento, per esempio se li lanci con ANTHROPIC_API_KEY.",
+  "billing": {
+    "mode": "subscription",
+    "api_projects": [],
+    "api_sessions": []
+  },
+
+  "_subscription": "Il tuo abbonamento. L'importo non e' scritto da nessuna parte su disco: mettilo tu. 'since' e' la data da cui contare le quote (null = da sempre).",
+  "subscription": {
+    "plan": "Claude Pro",
+    "monthly_cost": 20.0,
+    "currency": "USD",
+    "note": "",
+    "since": null
+  },
+
+  "_fx": "Serve solo se paghi l'abbonamento in una valuta diversa dal listino API (che e' in USD): quanti USD vale un'unita' della tua valuta. null = non mostrare il rapporto di resa.",
+  "fx": {
+    "usd_per_unit": null,
+    "updated": "2026-01-01"
+  },
+
+  "_pricing": "Listino API in USD per 1.000.000 di token. I prezzi cambiano: aggiornali qui e aggiorna la data sopra.",
+  "currency": "USD",
+  "cache_multipliers": {
+    "read": 0.10,
+    "write_5m": 1.25,
+    "write_1h": 2.00
+  },
+  "server_tools": {
+    "web_search_request": 0.01,
+    "web_fetch_request": 0.0
+  },
+  "models": {
+    "claude-fable-5":    { "in": 10.00, "out": 50.00 },
+    "claude-opus-5":     { "in":  5.00, "out": 25.00 },
+    "claude-opus-4-8":   { "in":  5.00, "out": 25.00 },
+    "claude-opus-4-7":   { "in":  5.00, "out": 25.00 },
+    "claude-opus-4-6":   { "in":  5.00, "out": 25.00 },
+    "claude-opus-4-5":   { "in":  5.00, "out": 25.00 },
+    "claude-opus-4-1":   { "in": 15.00, "out": 75.00 },
+    "claude-opus-4":     { "in": 15.00, "out": 75.00 },
+    "claude-sonnet-5":   { "in":  3.00, "out": 15.00 },
+    "claude-sonnet-4-6": { "in":  3.00, "out": 15.00 },
+    "claude-sonnet-4-5": { "in":  3.00, "out": 15.00 },
+    "claude-sonnet-4":   { "in":  3.00, "out": 15.00 },
+    "claude-haiku-4-5":  { "in":  1.00, "out":  5.00 },
+    "claude-3-5-haiku":  { "in":  0.80, "out":  4.00 }
+  },
+  "aliases": {
+    "claude-opus-4-1-20250805": "claude-opus-4-1",
+    "claude-3-5-haiku-20241022": "claude-3-5-haiku"
+  },
+  "free_models": ["<synthetic>"],
+
+  "_defaults": "Predefiniti di CLI e GUI. Le opzioni da riga di comando hanno comunque la precedenza. theme: 'dark', 'light' o 'auto' per seguire il sistema. locale: 'us' per 1,234.56 oppure 'it' per 1.234,56.",
+  "defaults": {
+    "idle_gap": 300,
+    "top": 20,
+    "locale": "us",
+    "theme": "auto",
+    "live_interval": 2.0,
+    "watch_interval": 3.0,
+    "auto_refresh_minutes": 5
+  },
+
+  "_statusline": "Segmento nella statusline di Claude Code. 'wrap_command' e' una statusline gia' tua da eseguire e a cui appendere il segmento: lasciato null, il segmento e' l'unica cosa mostrata. Esempio: [\"node\", \"C:/Users/tuonome/.claude/hooks/altra-statusline.js\"]. Le soglie sono la percentuale della finestra di 5 ore oltre la quale il numero diventa arancione e poi rosso.",
+  "statusline": {
+    "enabled": true,
+    "wrap_command": null,
+    "show_cost": true,
+    "show_active_time": true,
+    "show_messages": true,
+    "show_limits": true,
+    "separator": " · ",
+    "limit_warn_pct": 75,
+    "limit_critical_pct": 90,
+    "budget_ms": 150,
+    "max_bytes_per_render": 8388608,
+    "wrap_timeout_ms": 1500
+  }
+}

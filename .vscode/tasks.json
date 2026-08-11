@@ -1,0 +1,96 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "sessionId",
+      "type": "promptString",
+      "description": "UUID della sessione (basta il prefisso, es. a1b2c3d4)"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "monitor: GUI",
+      "type": "shell",
+      "command": "pythonw",
+      "args": ["claude_monitor_gui.py"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated",
+        "close": true
+      },
+      "detail": "Apre la finestra del monitor senza console"
+    },
+    {
+      "label": "monitor: GUI (console)",
+      "type": "shell",
+      "command": "python",
+      "args": ["claude_monitor_gui.py"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "Come sopra ma con la console visibile, per vedere i traceback"
+    },
+    {
+      "label": "monitor: watch",
+      "type": "shell",
+      "command": "python",
+      "args": ["claude_monitor.py", "--watch", "--interval", "3"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "group": "monitor"
+      },
+      "detail": "Cruscotto live nel terminale, da tenere accanto al panel di Claude Code"
+    },
+    {
+      "label": "monitor: per progetto (7g)",
+      "type": "shell",
+      "command": "python",
+      "args": ["claude_monitor.py", "--by-project", "--since", "7d"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "detail": "Totali per progetto dell'ultima settimana (Ctrl+Shift+B)"
+    },
+    {
+      "label": "monitor: sessione…",
+      "type": "shell",
+      "command": "python",
+      "args": ["claude_monitor.py", "--session", "${input:sessionId}", "--top", "0"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "detail": "Dettaglio turno per turno di una sessione"
+    },
+    {
+      "label": "monitor: svuota cache",
+      "type": "shell",
+      "command": "python",
+      "args": ["claude_monitor.py", "--clear-cache"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "detail": "Forza una riscansione completa dei transcript al prossimo avvio"
+    }
+  ]
+}

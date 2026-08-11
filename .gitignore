@@ -1,0 +1,26 @@
+# Configurazione personale: contiene il TUO piano e quanto paghi.
+# Nel repo c'è config.example.json: copialo in config.json e modificalo.
+config.json
+
+# Cache derivata dai transcript. Contiene titoli delle conversazioni, percorsi,
+# uuid di sessione e i tuoi orari di lavoro: non deve MAI finire in un repo.
+.cache.json
+
+# Bytecode: incorpora i percorsi assoluti della macchina che l'ha generato.
+__pycache__/
+*.py[cod]
+
+# Stato locale di Claude Code (permessi per macchina, lock con pid e sessione)
+.claude/settings.local.json
+.claude/*.lock
+
+# Esportazioni: sono conversazioni vere
+*.md.export
+conversazioni/
+
+# Sistema operativo / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+*.swp
