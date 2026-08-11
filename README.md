@@ -8,6 +8,10 @@ Solo libreria standard: **nessuna dipendenza da installare**, né Python né npm
 
 ![licenza MIT](https://img.shields.io/badge/licenza-MIT-blue) ![solo stdlib](https://img.shields.io/badge/dipendenze-nessuna-brightgreen)
 
+![claude-code-monitor](docs/claude-code-monitor.png)
+
+*Nelle schermate i nomi dei progetti e i titoli delle conversazioni sono offuscati.*
+
 ---
 
 ## A cosa serve

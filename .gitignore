@@ -18,6 +18,10 @@ __pycache__/
 *.md.export
 conversazioni/
 
+# Schermate non trattate: mostrano nomi di progetti, titoli e percorsi reali.
+# Quelle pubblicabili, con i dati offuscati, stanno in docs/.
+screen/
+
 # Sistema operativo / editor
 Thumbs.db
 desktop.ini
