@@ -1941,9 +1941,16 @@ class App:
         b_config = FlatButton(right, t, "⚙ Configura", command=self.open_config, width=104)
         b_config.set_bg(t["page"])
         b_config.pack(side="right", padx=(6, 0))
-        b_export = FlatButton(right, t, "Esporta", command=self.export_json, width=76)
+        b_export = FlatButton(right, t, "Esporta  ▾", command=self._export_menu, width=88)
         b_export.set_bg(t["page"])
         b_export.pack(side="right", padx=(6, 0))
+        self.b_export = b_export
+        self.menu_export = tk.Menu(b_export, tearoff=0, bg=t["surface"], fg=t["ink"],
+                                   activebackground=t["accent"], activeforeground="#ffffff",
+                                   bd=0, font=t.f_body, relief="flat")
+        self.menu_export.add_command(label="Conversazioni in Markdown…",
+                                     command=self.export_conversations)
+        self.menu_export.add_command(label="Dati in JSON…", command=self.export_json)
         self.search = SearchBox(right, t, "filtra progetto", self._on_search, width=140)
         self.search.pack(side="right", padx=(6, 0))
         self.dd_period = Dropdown(right, t, PERIODS, self._on_period, width=104)
@@ -1985,6 +1992,7 @@ class App:
         holder = tk.Frame(root, bg=t["page"])
         holder.pack(fill="both", expand=True, padx=20)
         self.projects = DataTable(holder, t, PROJECT_COLUMNS,
+                                  on_activate=self.open_project,
                                   share_key=lambda r: r["cost"])
         self.sessions_tbl = DataTable(holder, t, SESSION_COLUMNS,
                                       on_activate=self.open_detail,
@@ -2173,6 +2181,33 @@ class App:
                 self._set_progress(0)
                 self.l_status.config(text="errore durante la scansione")
                 messagebox.showerror(APP_TITLE, payload)
+            elif kind == "export":
+                what = payload[0]
+                if what == "progress":
+                    _, done, total, project = payload
+                    self._set_progress(done / total if total else 0)
+                    self.l_status.config(text=f"esporto {done}/{total}  ·  {project}")
+                elif what == "done":
+                    _, result, dove, _err = payload
+                    self._set_progress(0)
+                    self.b_export.set_text("Esporta  ▾")
+                    persi = len(result["failed"])
+                    self.l_status.config(
+                        text=f"{result['written']} conversazioni in {result['projects']} "
+                             f"progetti  ·  {dove}"
+                             + (f"  ·  {persi} non leggibili" if persi else ""))
+                    if messagebox.askyesno(APP_TITLE,
+                                           f"Esportate {result['written']} conversazioni.\n\n"
+                                           "Apro la cartella?"):
+                        try:
+                            os.startfile(dove)
+                        except Exception:
+                            pass
+                else:
+                    _, _r, _d, err = payload
+                    self._set_progress(0)
+                    self.b_export.set_text("Esporta  ▾")
+                    messagebox.showerror(APP_TITLE, err)
             elif kind == "log":
                 level, msg = payload
                 self.l_status.config(text=("⚠ " if level == "warn" else "") + msg)
@@ -2343,6 +2378,17 @@ class App:
 
     # -- azioni ---------------------------------------------------------------- #
 
+    def open_project(self, project):
+        """Doppio click su un progetto: scende alle sue conversazioni."""
+        name = project.get("project") or ""
+        self.search.set(name)
+        self.project_filter = name
+        self.apply_filters()
+        self.segmented.select(1)          # scheda Sessioni
+        self.l_status.config(
+            text=f"{len(self.filtered)} conversazioni di «{name}»  ·  "
+                 f"doppio click per rileggerne una  ·  svuota il filtro per tornare a tutte")
+
     def open_detail(self, session):
         DetailWindow(self, session)
 
@@ -2376,6 +2422,49 @@ class App:
             self.live_stop.set()
         cm.LOG_HOOK = None
         self.root.destroy()
+
+    def _export_menu(self):
+        try:
+            self.menu_export.tk_popup(self.b_export.winfo_rootx(),
+                                      self.b_export.winfo_rooty() + self.b_export.bh + 2)
+        finally:
+            self.menu_export.grab_release()
+
+    def export_conversations(self):
+        """Esporta in Markdown le conversazioni attualmente filtrate.
+
+        Una cartella per progetto più un indice. Gira su un thread perché ogni
+        sessione va riletta per intero: il testo non sta nella cache.
+        """
+        if not self.filtered:
+            messagebox.showinfo(APP_TITLE, "Nessuna conversazione da esportare.")
+            return
+        quante = len(self.filtered)
+        dove = filedialog.askdirectory(
+            parent=self.root,
+            title=f"Cartella dove esportare {quante} conversazioni")
+        if not dove:
+            return
+        if quante > 40 and not messagebox.askyesno(
+                APP_TITLE,
+                f"Stai per esportare {quante} conversazioni.\n\n"
+                "Ognuna viene riletta per intero, quindi può volerci qualche "
+                "minuto e occupare parecchi MB.\n\nProcedo?"):
+            return
+        sessions = list(self.filtered)
+        self.b_export.set_text("…")
+        threading.Thread(target=self._export_worker,
+                         args=(sessions, dove), daemon=True).start()
+
+    def _export_worker(self, sessions, dove):
+        try:
+            def progress(done, total, project):
+                self.q.put(("export", self.gen, ("progress", done, total, project)))
+            result = cm.export_conversations(sessions, self.base, self.pricing, dove,
+                                             self.idle_gap, False, progress)
+            self.q.put(("export", self.gen, ("done", result, dove, None)))
+        except BaseException:
+            self.q.put(("export", self.gen, ("error", None, dove, traceback.format_exc())))
 
     def export_json(self):
         path = filedialog.asksaveasfilename(

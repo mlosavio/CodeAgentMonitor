@@ -115,6 +115,9 @@ Opzioni: `--theme auto|light|dark`, `--tab progetti|sessioni|mesi`, `--live`, `-
 
 ## Rileggere le conversazioni
 
+**Doppio click su un progetto** nella scheda Progetti scende alle sue conversazioni: filtra e
+passa alla scheda Sessioni. Per tornare a tutte, svuota il filtro.
+
 La scheda **Sessioni** è l'indice della history: titolo, data, progetto, durata, costo. Doppio
 click su una riga:
 
@@ -123,16 +126,41 @@ click su una riga:
 - **Costi** — lo stesso percorso ma con token e costo per turno;
 - **Esporta .md** — la conversazione in Markdown, con titolo, data, durata e costi in testa.
 
-Da riga di comando:
+### Esportare un progetto intero
+
+Il menu **Esporta ▾** ha due voci: *Dati in JSON* (i numeri, per elaborarli altrove) e
+**Conversazioni in Markdown**, che esporta **tutto quello che stai vedendo** — quindi filtra
+per progetto o per periodo e poi esporta. Produce una cartella per progetto più un indice:
+
+```
+esportazione/
+  indice.md
+  MioProgetto/
+    2026-03-14 Rifare il layout della dashboard [a1b2c3d4].md
+    2026-03-02 Aggiungere export CSV [e5f6a7b8].md
+  SitoWeb/
+    2026-02-20 Ottimizzare le immagini [c9d0e1f2].md
+```
+
+`indice.md` raggruppa per progetto e per ognuno elenca data, titolo (in link al file),
+messaggi, tempo attivo e valore a listino. Il nome dei file parte dalla data, così l'ordine
+alfabetico è già quello cronologico.
+
+Da riga di comando, con gli stessi filtri:
 
 ```bat
 python claude_monitor.py --session a1b2c3d4 --chat > conversazione.md
-python claude_monitor.py --session a1b2c3d4 --chat --with-subagents
+python claude_monitor.py --project MioProgetto --export-md .\esportazione
+python claude_monitor.py --since 30d --export-md .\esportazione --with-subagents
 ```
 
 I messaggi dei subagent sono esclusi per default: sono lavoro interno e spezzerebbero il filo
 del discorso. Nella finestra si vedono al massimo gli ultimi 400 messaggi; l'esportazione li
 contiene tutti.
+
+L'esportazione rilegge ogni sessione per intero — il testo non sta nella cache, che tiene solo
+i numeri — quindi su molte conversazioni ci vuole qualche minuto. Nella GUI gira su un thread
+separato con avanzamento nella barra di stato, e sopra le 40 conversazioni chiede conferma.
 
 ### Dove sono salvate, e serve un database?
 

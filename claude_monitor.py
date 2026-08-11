@@ -1531,6 +1531,95 @@ def conversation_markdown(sess: dict, messages: list[dict], pricing: dict,
     return "\n".join(out).rstrip() + "\n"
 
 
+_UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def conversation_filename(sess: dict) -> str:
+    """Nome file leggibile e ordinabile: data, titolo, prefisso della sessione."""
+    when = h_time(sess.get("start"), "%Y-%m-%d") if sess.get("start") else "senza-data"
+    title = (sess.get("title") or sess.get("first_prompt") or "senza titolo").strip()
+    title = _UNSAFE.sub("-", title)
+    title = " ".join(title.split())[:70].rstrip(" .")
+    return f"{when} {title} [{(sess.get('session_id') or '')[:8]}].md"
+
+
+def export_conversations(sessions: list[dict], base: str, pricing: dict,
+                         out_dir: str, idle_gap: float = 300.0,
+                         include_subagents: bool = False,
+                         on_progress=None) -> dict:
+    """Scrive una cartella con un indice e una conversazione per file.
+
+    Le sessioni vengono rilette una a una: il testo dei messaggi non sta nella
+    cache, che tiene solo i numeri. Ritorna un riepilogo di quello che ha scritto.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    by_project: dict[str, list[tuple[dict, str]]] = {}
+    written, failed = 0, []
+    total = len(sessions)
+
+    for i, s in enumerate(sessions, 1):
+        if on_progress is not None:
+            on_progress(i, total, s.get("project") or "?")
+        try:
+            full, messages = load_conversation(base, s["session_id"], pricing, idle_gap)
+            if not full:
+                failed.append(s["session_id"])
+                continue
+            project = full.get("project") or "senza-progetto"
+            folder = os.path.join(out_dir, _UNSAFE.sub("-", project))
+            os.makedirs(folder, exist_ok=True)
+            name = conversation_filename(full)
+            with open(os.path.join(folder, name), "w", encoding="utf-8") as fh:
+                fh.write(conversation_markdown(full, messages, pricing, include_subagents))
+            by_project.setdefault(project, []).append((full, name))
+            written += 1
+        except Exception:
+            failed.append(s.get("session_id", "?"))
+
+    index = os.path.join(out_dir, "indice.md")
+    with open(index, "w", encoding="utf-8") as fh:
+        fh.write(_index_markdown(by_project, pricing))
+    return {"written": written, "failed": failed, "index": index,
+            "projects": len(by_project)}
+
+
+def _index_markdown(by_project: dict, pricing: dict) -> str:
+    """Indice delle conversazioni esportate, un blocco per progetto."""
+    sub = subscription_of(pricing)
+    out = ["# Conversazioni Claude Code", "",
+           f"Esportate il {dt.datetime.now():%d/%m/%Y %H:%M}.", ""]
+    tot_cost = sum(s["cost"] for sess in by_project.values() for s, _ in sess)
+    tot_n = sum(len(v) for v in by_project.values())
+    out.append(f"{tot_n} conversazioni in {len(by_project)} progetti"
+               f"  {BULLET}  {h_cost(tot_cost)} a listino API"
+               + (f", su un abbonamento da {money(float(sub['monthly_cost']), display_currency(pricing))}/mese"
+                  if sub else ""))
+    out += ["", "---", ""]
+
+    for project in sorted(by_project, key=lambda p: -sum(s["cost"] for s, _ in by_project[p])):
+        rows = sorted(by_project[project], key=lambda r: r[0].get("start") or 0, reverse=True)
+        costo = sum(s["cost"] for s, _ in rows)
+        attivo = sum(s["active"] for s, _ in rows)
+        out.append(f"## {project}")
+        out.append("")
+        out.append(f"{len(rows)} conversazioni  {BULLET}  {h_cost(costo)}  "
+                   f"{BULLET}  {h_dur(attivo)} di lavoro effettivo")
+        out.append("")
+        out.append("| Quando | Conversazione | Messaggi | Attivo | Se fosse API |")
+        out.append("|---|---|---:|---:|---:|")
+        for s, name in rows:
+            titolo = (s.get("title") or s.get("first_prompt") or "(senza titolo)")
+            titolo = " ".join(titolo.split())[:80].replace("|", "\\|")
+            link = f"{_UNSAFE.sub('-', project)}/{name}".replace(" ", "%20")
+            out.append(f"| {h_time(s.get('start'), '%d/%m/%Y %H:%M')} "
+                       f"| [{titolo}]({link}) "
+                       f"| {s.get('user_prompts')}/{s.get('assistant_msgs')} "
+                       f"| {h_dur(s.get('active'))} "
+                       f"| {h_cost(s.get('cost', 0))} |")
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
 def find_session_files(base: str, needle: str) -> tuple[str | None, list[str]]:
     """Trova i file (principale + subagent) di una sessione, per uuid o prefisso."""
     hits: dict[str, list[str]] = {}
@@ -1850,7 +1939,10 @@ configurazione (abbonamento, listino, tema, default):
                    help="con --session: stampa la conversazione in Markdown "
                         "(titolo, data e percorso fatto) invece del dettaglio dei costi")
     p.add_argument("--with-subagents", action="store_true",
-                   help="con --chat: include anche i messaggi dei subagent")
+                   help="con --chat o --export-md: include i messaggi dei subagent")
+    p.add_argument("--export-md", metavar="CARTELLA",
+                   help="esporta in Markdown le conversazioni selezionate (rispetta "
+                        "--project e --since): una cartella per progetto più un indice")
     p.add_argument("--watch", action="store_true", help="cruscotto live sulla sessione più recente")
     p.add_argument("--interval", type=float, default=None,
                    help="secondi tra i refresh in --watch (default da config.json)")
@@ -1919,6 +2011,19 @@ def main(argv=None) -> int:
         sessions = [s for s in sessions if (s["end"] or 0) >= since]
     sessions = [s for s in sessions if s["assistant_msgs"] or s["user_prompts"]]
     allocate_real_cost(sessions, pricing)
+
+    if args.export_md:
+        def progress(done, total, project):
+            info(f"[{done}/{total}] {project}")
+        result = export_conversations(sessions, args.base, pricing, args.export_md,
+                                      args.idle_gap, args.with_subagents, progress)
+        print()
+        print(C.w(f"  {result['written']} conversazioni in {result['projects']} progetti "
+                  f"{BULLET} indice: {result['index']}", C.BOLD))
+        if result["failed"]:
+            warn(f"{len(result['failed'])} sessioni non leggibili: "
+                 + ", ".join(s[:8] for s in result["failed"][:5]))
+        return 0
 
     if args.json:
         view_json(sessions, pricing, args)
