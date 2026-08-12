@@ -4,6 +4,9 @@ Tempo, costo e numero di messaggi delle conversazioni **Claude Code**, ricavati 
 JSONL che Claude Code scrive in locale. Con interfaccia grafica, cruscotto live nel terminale
 e un segmento per la statusline.
 
+Per un gruppo di lavoro c'è anche un [raccoglitore della telemetria](#più-macchine-il-pannello-di-team)
+che mette insieme più macchine, con tre livelli di riservatezza fra cui scegliere.
+
 Solo libreria standard: **nessuna dipendenza da installare**, né Python né npm.
 
 ![licenza MIT](https://img.shields.io/badge/licenza-MIT-blue) ![solo stdlib](https://img.shields.io/badge/dipendenze-nessuna-brightgreen)
@@ -99,9 +102,13 @@ Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla 
 
 - **Tessere** in alto: quanto hai pagato, quanto varrebbe a listino, tempo attivo, messaggi,
   sessione in corso e **consumo dei limiti del piano**.
-- Tre schede: **Progetti**, **Sessioni** (con il titolo che Claude Code assegna alla
-  conversazione) e **Mesi**. Colonne ordinabili; l'ordinamento usa i valori numerici, non le
-  stringhe formattate, quindi `$2,055.7` non finisce sotto `$301.4`.
+- Quattro schede: **Progetti**, **Sessioni** (con il titolo che Claude Code assegna alla
+  conversazione), **Mesi** e **Persone**. Colonne ordinabili; l'ordinamento usa i valori
+  numerici, non le stringhe formattate, quindi `$2,055.7` non finisce sotto `$301.4`.
+- **Persone** mostra il consumo di più macchine e compare popolata solo se hai avviato il
+  [raccoglitore](#più-macchine-il-pannello-di-team). L'intestazione della prima colonna dice
+  *Persona*, *Postazione* o *Insieme* a seconda del livello di riservatezza in vigore, così si
+  capisce senza chiedere se si stanno guardando persone o codici.
 - **Ogni intestazione ha la sua spiegazione** al passaggio del mouse.
 - **Doppio click su una sessione** apre la conversazione, rileggibile, con export in Markdown.
 - **Live**: la tessera di destra segue la sessione attiva e si aggiorna ogni 2 s leggendo solo
@@ -114,6 +121,10 @@ Aspetto: superfici piatte, tabella disegnata su Canvas, tema chiaro/scuro che se
 
 Opzioni: `--theme auto|light|dark`, `--tab progetti|sessioni|mesi`, `--live`, `--detail <uuid>`,
 `--auto-refresh MIN`, `--locale us|it`.
+
+Il pulsante **Configura** apre le impostazioni vere, non il file JSON: abbonamento, team,
+aspetto, statusline e listino. Se una modifica richiede il riavvio, l'applicazione si riavvia
+da sola.
 
 ---
 
@@ -267,6 +278,110 @@ una finestra il cui reset è già passato diventa `—`, e l'età del dato è se
 
 ---
 
+## Più macchine: il pannello di team
+
+I transcript coprono la tua macchina e basta. Per vedere un gruppo di lavoro serve un'altra
+fonte, e **Claude Code ce l'ha già**: sa esportare da sé la propria telemetria via
+OpenTelemetry, senza che sulle postazioni debba girare niente di scritto da noi.
+
+`cm_collector.py` riceve quel flusso e lo conserva. Riceve **OTLP in codifica JSON su HTTP**,
+quindi niente protobuf e nessuna dipendenza: solo stdlib, come tutto il resto.
+
+```bat
+python cm_collector.py --setup          :: stampa la configurazione da mettere in settings.json
+python cm_collector.py                  :: avvia il raccoglitore su 127.0.0.1:4318
+python cm_collector.py --report --by user
+```
+
+Poi **riavvia Claude Code**: le variabili d'ambiente si leggono all'avvio, le sessioni già
+aperte non esportano nulla. Il cruscotto è su `http://127.0.0.1:4318/`, e nel pannello grafico
+compare la scheda **Persone**.
+
+### Cosa arriva
+
+| Metrica | Cosa misura |
+|---|---|
+| `cost.usage` | valore del consumo a listino API |
+| `token.usage` | token, divisi in input, output, cache read, cache creation |
+| `active_time.total` | tempo di lavoro effettivo |
+| `session.count` | sessioni avviate |
+| `subagent.spawn` | subagent generati |
+| `tool.execution`, `code_edit_tool.decision` | uso degli strumenti e modifiche accettate |
+| `lines_of_code.count`, `commit.count`, `pull_request.count` | prodotto del lavoro |
+| `mcp.rpc`, `compaction`, `hook`, `bash.subprocess` | il resto della strumentazione |
+
+Attributi: `user.email`, `user.id`, `organization.id`, `session.id`, `model`, `terminal.type`.
+
+### I tre livelli di riservatezza
+
+**La telemetria manda `user.email` in chiaro, sempre, e non c'è un'impostazione sulla postazione
+che lo tolga.** Il livello di dettaglio si impone quindi **nel raccoglitore**, nel momento in cui
+il dato viene scritto — che è anche l'unico punto in cui la scelta è verificabile, e l'unico
+sotto il controllo di chi amministra invece che di ogni singola macchina.
+
+| `--privacy` | Cosa finisce in archivio | Cosa resta possibile |
+|---|---|---|
+| `aggregato` | nessun identificativo di persona | costo per modello, resa complessiva, peso della cache |
+| `pseudonimo` *(default)* | un codice stabile a chiave, non l'indirizzo | anche postazioni ferme e saturazione dei limiti |
+| `nominativo` | l'indirizzo di posta | attribuzione diretta |
+
+Con `pseudonimo` la chiave sta in un file separato dall'archivio: chi ha l'archivio non risale
+alle persone, chi ha anche la chiave può ricalcolare i codici da un indirizzo noto. Tenerli
+separati è tutto il senso del livello intermedio.
+
+Il testo delle richieste **non esce mai**: `OTEL_LOG_USER_PROMPTS` resta a `0`, ed è il valore
+predefinito. La configurazione stampata da `--setup` lo scrive comunque in modo esplicito,
+perché è la riga che si mostra a chi chiede.
+
+`python test_collector.py` verifica anche questo, e lo verifica **sui byte del file**: con
+`pseudonimo` l'indirizzo non deve comparire, con `nominativo` deve — altrimenti la prova
+passerebbe a vuoto. Va guardato anche il file `-wal`, perché finché SQLite non fa il checkpoint
+i dati stanno lì e non nel `.db`.
+
+### Le postazioni ferme non si vedono, si deducono
+
+Chi non usa Claude Code non manda telemetria, quindi **non compare da nessuna parte**. Per
+scoprire le postazioni pagate e mai usate bisogna dichiarare quante se ne pagano, nella pagina
+**Team** della configurazione o nella sezione `team` di `config.json`:
+
+```json
+"team": { "seats": 8, "fee_per_seat": 30.0, "currency": "EUR", "db": null }
+```
+
+Da lì il pannello ricava le colonne **Hai pagato** e **Resa**, e il conto di quanto si spende a
+vuoto. Con l'abbonamento di gruppo ogni postazione costa uguale che venga usata o no, quindi la
+domanda utile non è quanto ha speso una persona — la risposta è sempre la stessa cifra — ma
+quanto ha reso la postazione rispetto a quello che si paga comunque.
+
+```
+postazione      pagato    se fosse API    resa
+anna@x.it       90,00€        $421.00     4,3×
+bruno@x.it      90,00€        $180.00     1,9×
+carla@x.it      90,00€         $12.00    <0,1×
+
+8 postazioni pagate · 3 usate · 5 ferme = 450 € in 3 mesi
+```
+
+Il totale della colonna *Hai pagato* copre tutte le postazioni, ferme comprese: sommare le righe
+visibili darebbe una cifra più bassa e farebbe sparire proprio i soldi spesi per niente.
+
+### Tenerlo acceso
+
+Un raccoglitore fermo **non lascia traccia**: l'esportatore ritenta per poco e poi lascia
+perdere, e i dati di quell'intervallo non si recuperano. Avviato a mano da un terminale muore
+con quel terminale, quindi va installato come servizio:
+
+```bat
+python cm_collector.py --setup-service
+```
+
+stampa il comando giusto per il sistema in uso — attività pianificata su Windows, unità systemd
+altrove. Per un gruppo di lavoro il raccoglitore sta su **una** macchina in sede, installato
+come servizio di sistema e con `--host` aperto oltre `127.0.0.1`; le postazioni gli mandano i
+dati e non ricevono connessioni da nessuno.
+
+---
+
 ## Cosa legge
 
 ```
@@ -335,14 +450,19 @@ si sono misurate 377 chiavi aperte insieme: quell'ottimizzazione gonfia i token 
 
 ## Configurazione
 
-Dalla GUI: pulsante **Configura**. Un pannello su quattro pagine:
+Dalla GUI: pulsante **Configura**. Un pannello su cinque pagine:
 
 | Pagina | Cosa ci trovi |
 |---|---|
 | **Abbonamento** | abbonamento o API, piano, costo mensile, valuta, data di attivazione, cambio |
+| **Team** | postazioni pagate, quota per postazione, valuta, archivio del raccoglitore |
 | **Aspetto** | tema, formato numeri, ogni quanto aggiornare, soglia di inattività |
 | **Statusline** | quali pezzi mostrare e le soglie di colore dei limiti |
 | **Listino** | prezzo input/output di ogni modello |
+
+Nella pagina Team il livello di riservatezza è **in sola lettura**, con scritto dove si cambia:
+lo impone il raccoglitore quando scrive, non il pannello quando legge. Metterlo lì come campo
+modificabile suggerirebbe un controllo che il pannello non ha.
 
 I valori sono validati prima di scrivere; se cambi il tema **l'applicazione si riavvia da sola**,
 perché quello non si applica a caldo.
@@ -443,6 +563,12 @@ successive ~0,3 s, refresh live ~5 ms.
 - **I prezzi cambiano**: `config.json` ha un campo `updated`, mostrato in fondo a ogni report.
 - **Righe parziali**: durante lo streaming l'ultima riga del file può essere incompleta. Viene
   saltata senza errori.
+- **La telemetria parte da quando l'accendi**: non ha memoria di quello che è successo prima,
+  e i mesi già passati restano leggibili solo dai transcript, cioè solo sulla macchina che li
+  ha prodotti. Portare lo storico di più macchine in un archivio unico richiederebbe un
+  componente sulle postazioni che oggi non c'è.
+- **La scheda Persone non conosce l'abbonamento**: il costo che mostra è il valore a listino
+  API, mentre "Hai pagato" viene dalle postazioni che dichiari, non da una fattura letta.
 - Sviluppato e provato su **Windows**. Il codice usa solo percorsi portabili (`expanduser`,
   `USERPROFILE`/`LOCALAPPDATA`) ma su macOS e Linux non è stato testato: segnalazioni benvenute.
 
@@ -464,6 +590,10 @@ python claude_monitor.py --json --top 0 > dopo.json
 Le due uscite devono differire solo per `generated_at` e per le sessioni cresciute nel frattempo.
 Se tocchi la formula di costo, `node statusline/cm-statusline.js --selftest <uuid>` deve
 coincidere con `python claude_monitor.py --session <uuid>` al centesimo.
+
+Se tocchi il raccoglitore, `python test_collector.py` deve restare verde: copre i punti dove il
+conteggio si sbaglia — invii ritentati, metriche cumulative, totali per gruppo — e il confine di
+riservatezza.
 
 ---
 
