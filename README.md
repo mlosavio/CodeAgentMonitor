@@ -338,6 +338,53 @@ perché è la riga che si mostra a chi chiede.
 passerebbe a vuoto. Va guardato anche il file `-wal`, perché finché SQLite non fa il checkpoint
 i dati stanno lì e non nel `.db`.
 
+### Lo storico: `cm_agent.py`
+
+La telemetria parte dal giorno in cui la accendi. Su questa macchina, il giorno
+dell'accensione, copriva lo **0,00%** del consumo totale: `$0.10` contro `$2.958,85`
+ricavati dai transcript, che erano sul disco da tre mesi. È la misura di cosa manca alla sola
+telemetria.
+
+`cm_agent.py` colma quel vuoto: rilegge i transcript con lo stesso parser del pannello, calcola
+la differenza rispetto a quanto già spedito e manda solo quella.
+
+```bat
+python cm_agent.py --dry-run       :: mostra cosa spedirebbe, senza spedire
+python cm_agent.py --show-payload  :: stampa il JSON esatto che uscirebbe
+python cm_agent.py --once          :: un invio solo
+python cm_agent.py                 :: resta e rispedisce ogni 15 minuti
+```
+
+Non apre porte e non resta in ascolto: parla solo lui, verso il raccoglitore. Funziona quindi
+identico in sede, in VPN e su un portatile fuori rete, e non aggiunge superficie di attacco
+sulle postazioni.
+
+**Cosa esce da una macchina** è un elenco di *inclusioni*, non di esclusioni — `CAMPI_SPEDITI`
+in cima al file. La differenza conta: un elenco di esclusioni ci si dimentica di aggiornarlo
+quando il parser guadagna un campo nuovo, uno di inclusioni lascia il campo nuovo a terra, che
+è il verso giusto in cui sbagliare. Titoli, testo delle richieste, percorsi e nomi di ramo non
+sono nell'elenco. Il controllo gira **prima di ogni invio**, non solo nelle prove, e
+`--show-payload` mostra esattamente i byte che partirebbero.
+
+L'identità è l'indirizzo dell'account letto da `~/.claude.json`, lo stesso che manda la
+telemetria: è l'unico modo perché le due fonti si uniscano sulla stessa persona invece di
+comparire come due postazioni distinte. Il raccoglitore lo riduce secondo il livello scelto,
+esattamente come fa con la telemetria.
+
+### Due fonti, mai sommate
+
+Appena la telemetria è accesa, la stessa sessione esiste in entrambe le fonti. Sommarle la
+conterebbe due volte, quindi il pannello sceglie:
+
+| Grandezza | Da dove | Perché |
+|---|---|---|
+| costo, token, tempo attivo, sessioni, progetti | **transcript** | coprono anche i mesi precedenti all'accensione |
+| righe modificate, commit, PR, subagent, strumenti, MCP | **telemetria** | i transcript non le hanno |
+| ultima attività | entrambe | è un massimo, non una somma |
+
+Una postazione senza agente compare lo stesso, ma segnata come tale: mostra solo quello che la
+telemetria ha visto da quando è stata accesa, che di solito è molto meno del vero.
+
 ### Le postazioni ferme non si vedono, si deducono
 
 Chi non usa Claude Code non manda telemetria, quindi **non compare da nessuna parte**. Per
@@ -567,8 +614,11 @@ successive ~0,3 s, refresh live ~5 ms.
   e i mesi già passati restano leggibili solo dai transcript, cioè solo sulla macchina che li
   ha prodotti. Portare lo storico di più macchine in un archivio unico richiederebbe un
   componente sulle postazioni che oggi non c'è.
-- **La scheda Persone non conosce l'abbonamento**: il costo che mostra è il valore a listino
-  API, mentre "Hai pagato" viene dalle postazioni che dichiari, non da una fattura letta.
+- **"Hai pagato" viene da quello che dichiari**, non da una fattura letta: postazioni per quota
+  per mesi coperti dai dati. La riconciliazione con l'export di fatturazione non c'è ancora.
+- **Il campo `real_cost` delle sessioni non va sommato per progetto**: è la quota ripartita per
+  *mese*, quindi in un mese poco usato un progetto da pochi dollari si prende tutto il canone.
+  Per il team la cifra buona è postazioni × quota, che è quella che il pannello mostra.
 - Sviluppato e provato su **Windows**. Il codice usa solo percorsi portabili (`expanduser`,
   `USERPROFILE`/`LOCALAPPDATA`) ma su macOS e Linux non è stato testato: segnalazioni benvenute.
 
