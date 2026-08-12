@@ -110,7 +110,10 @@ Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla 
   *Persona*, *Postazione* o *Insieme* a seconda del livello di riservatezza in vigore, così si
   capisce senza chiedere se si stanno guardando persone o codici. **Doppio click su una
   postazione** apre su cosa ha lavorato, progetto per progetto: è la vista per il ribaltamento
-  sulle commesse.
+  sulle commesse. Se hai caricato l'export di fatturazione, accanto a *Hai pagato* — che è la
+  stima del modello — compare *Fatturato*, che è quello che la console addebita davvero; e
+  **compaiono anche le postazioni che pagano senza consumare**, che altrimenti non esisterebbero
+  in nessuna riga.
 - **Ogni intestazione ha la sua spiegazione** al passaggio del mouse.
 - **Doppio click su una sessione** apre la conversazione, rileggibile, con export in Markdown.
 - **Live**: la tessera di destra segue la sessione attiva e si aggiorna ogni 2 s leggendo solo
