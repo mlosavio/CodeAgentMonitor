@@ -287,6 +287,65 @@ def un_giro(args, config: dict, stato: dict, path_stato: str) -> bool:
     return True
 
 
+def print_service(endpoint: str, token: str | None, interval: float) -> None:
+    """Come tenere in piedi l'agente su una postazione, senza privilegi.
+
+    L'agente gira come l'utente, non come servizio di sistema: deve leggere i
+    transcript dentro il profilo della persona, che un servizio di macchina non
+    vedrebbe. Basta quindi l'avvio automatico all'accesso.
+
+    A differenza del raccoglitore, qui una fermata non perde niente: al giro
+    dopo l'agente ricalcola dai transcript e rimanda l'arretrato. Serve percio'
+    che riparta da solo, non che non si fermi mai.
+    """
+    qui = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(qui, os.path.basename(__file__))
+    args = f'"{script}" --endpoint {endpoint} --interval {interval:g}'
+    if token:
+        args += f" --token {token}"
+
+    print("Far ripartire l'agente a ogni accesso")
+    print("=" * 64)
+    print()
+    if os.name == "nt":
+        pyw = sys.executable.replace("python.exe", "pythonw.exe")
+        print("Windows — collegamento in Esecuzione automatica.")
+        print("Incolla in PowerShell (non serve amministratore):")
+        print()
+        print("  $s = (New-Object -ComObject WScript.Shell).CreateShortcut(")
+        print("      (Join-Path ([Environment]::GetFolderPath('Startup')) "
+              "'cm-agent.lnk'))")
+        print(f"  $s.TargetPath       = '{pyw}'")
+        print(f"  $s.Arguments        = '{args}'")
+        print(f"  $s.WorkingDirectory = '{qui}'")
+        print("  $s.Save()")
+        print()
+        print("  per toglierlo, cancella il collegamento:  explorer shell:startup")
+    else:
+        print("Linux o macOS — unita' utente systemd in")
+        print("~/.config/systemd/user/cm-agent.service:")
+        print()
+        print("  [Unit]")
+        print("  Description=Agente storico Claude Code")
+        print("  [Service]")
+        print(f"  ExecStart={sys.executable} {args}")
+        print("  Restart=always")
+        print("  [Install]")
+        print("  WantedBy=default.target")
+        print()
+        print("  systemctl --user enable --now cm-agent")
+        print("  loginctl enable-linger $USER   # perche' giri anche a sessione chiusa")
+    print()
+    if token:
+        print("Il token compare nel comando, quindi e' leggibile da chi usa la")
+        print("postazione. Va bene: autorizza a scrivere nell'archivio, non a")
+        print("leggerlo. Se questo non basta, mettilo nella variabile CM_TOKEN")
+        print("e togli --token dalla riga qui sopra.")
+    else:
+        print("Nessun token: va bene solo se il raccoglitore ascolta in locale.")
+        print("Appena e' su un'altra macchina, rilancia con --token.")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Manda al raccoglitore le sessioni ricavate dai transcript.")
@@ -308,7 +367,13 @@ def main(argv=None) -> int:
                     help="stampa il JSON esatto che uscirebbe")
     ap.add_argument("--reset", action="store_true",
                     help="dimentica cosa e' gia' stato spedito e rimanda tutto")
+    ap.add_argument("--setup-service", action="store_true",
+                    help="stampa come farlo ripartire a ogni accesso")
     args = ap.parse_args(argv)
+
+    if args.setup_service:
+        print_service(args.endpoint, args.token, args.interval)
+        return 0
 
     config = cm.load_config(args.config)
     if args.base is None:

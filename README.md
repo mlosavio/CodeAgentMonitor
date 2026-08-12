@@ -292,6 +292,8 @@ OpenTelemetry, senza che sulle postazioni debba girare niente di scritto da noi.
 `cm_collector.py` riceve quel flusso e lo conserva. Riceve **OTLP in codifica JSON su HTTP**,
 quindi niente protobuf e nessuna dipendenza: solo stdlib, come tutto il resto.
 
+Per provarlo su una macchina sola, tre comandi:
+
 ```bat
 python cm_collector.py --setup          :: stampa la configurazione da mettere in settings.json
 python cm_collector.py                  :: avvia il raccoglitore su 127.0.0.1:4318
@@ -301,6 +303,149 @@ python cm_collector.py --report --by user
 Poi **riavvia Claude Code**: le variabili d'ambiente si leggono all'avvio, le sessioni già
 aperte non esportano nulla. Il cruscotto è su `http://127.0.0.1:4318/`, e nel pannello grafico
 compare la scheda **Persone**.
+
+Per un gruppo di lavoro le due metà si separano: il raccoglitore su **una** macchina, la
+telemetria e l'agente su **ognuna** delle altre. Le due sezioni che seguono sono l'installazione
+completa, nell'ordine in cui va fatta — prima il raccoglitore, perché è l'indirizzo che serve
+alle postazioni.
+
+### Attivarlo, parte prima: la macchina che raccoglie
+
+Una sola per tutto il gruppo. Le serve Python 3.9+, di essere raggiungibile dalle postazioni
+sulla porta scelta, e di essere accesa quando si lavora. Non le serve potenza: cinquanta
+postazioni fanno una richiesta ogni diciotto secondi, e il raccoglitore ne regge cinquecento al
+secondo (§ *Quanto grande può essere il gruppo*).
+
+**1. Un token condiviso.** Aprire alla rete senza è come lasciare l'archivio scrivibile da
+chiunque sia in rete: il raccoglitore avverte all'avvio, ma non impedisce.
+
+```bat
+python -c "import secrets; print(secrets.token_urlsafe(24))"
+```
+
+**2. Avvialo.** `--host 0.0.0.0` significa "su tutte le interfacce", non è un indirizzo a cui
+collegarsi.
+
+```bat
+python cm_collector.py --host 0.0.0.0 --port 4318 --token IL-TOKEN ^
+    --privacy pseudonimo ^
+    --db C:\claude-team\cm-team.db ^
+    --key C:\claude-team\chiavi\cm-pseudonimi.key
+```
+
+Tieni **la chiave in una cartella diversa dall'archivio**, con permessi diversi: chi ha
+l'archivio non deve poter risalire alle persone. È tutto il senso del livello intermedio, e
+metterli nella stessa cartella lo annulla senza che nulla smetta di funzionare.
+
+**3. Apri la porta**, da PowerShell come amministratore. Solo il profilo di dominio: non è un
+servizio da esporre altrove.
+
+```powershell
+New-NetFirewallRule -DisplayName 'cm-collector' -Direction Inbound `
+    -Protocol TCP -LocalPort 4318 -Action Allow -Profile Domain
+```
+
+**4. Fallo ripartire da solo.** Un raccoglitore fermo **non lascia traccia**: l'esportatore
+ritenta per poco e poi lascia perdere, e quell'intervallo non si recupera più. È la differenza
+con l'agente, che invece l'arretrato lo ricalcola.
+
+```bat
+python cm_collector.py --setup-service --host 0.0.0.0 --port 4318 --privacy pseudonimo --db C:\claude-team\cm-team.db
+```
+
+Stampa il comando già compilato con questi parametri: collegamento in Esecuzione automatica
+(senza privilegi), attività pianificata o unità systemd. Per una macchina di servizio scegli la
+versione da amministratore, che parte anche senza che nessuno faccia l'accesso.
+
+**5. Verifica** da un'altra macchina, prima di andare sulle postazioni:
+
+```bat
+curl "http://srv-claude.azienda.it:4318/healthz?token=IL-TOKEN"
+```
+
+Se non risponde, il problema è la rete o il firewall, e conviene scoprirlo adesso invece che in
+mezzo alla configurazione di dieci postazioni.
+
+Il token vale **anche in lettura**: il cruscotto dice quanto consuma ogni postazione, e un
+raccoglitore aperto alla rete senza protezione lo mostrerebbe a chiunque. Nel browser va
+nell'indirizzo, perché un browser non manda intestazioni:
+
+```
+http://srv-claude.azienda.it:4318/?token=IL-TOKEN
+```
+
+### Attivarlo, parte seconda: ogni postazione
+
+Cinque minuti a persona. Sono due cose distinte, e conviene non confonderle: la **telemetria**
+la manda Claude Code da sé, l'**agente** recupera lo storico dai transcript. La prima si accende
+con delle variabili d'ambiente, il secondo è un processo da avviare.
+
+Per chi ci lavora non cambia niente: nessuna finestra, nessun rallentamento, nessuna porta
+aperta sulla sua macchina. L'agente parla solo lui, verso il raccoglitore.
+
+**1. I file.** Sulla postazione ne servono **due**: `claude_monitor.py` e `cm_agent.py`. Nessuna
+dipendenza da installare, e `config.json` non è obbligatorio — se manca valgono i valori
+integrati. Vanno bene una cartella di rete in sola lettura o un clone del repository.
+
+**2. La telemetria.** Sul raccoglitore, chiedi il blocco da incollare — con lo stesso token,
+altrimenti stampa una configurazione che verrà rifiutata:
+
+```bat
+python cm_collector.py --setup --host srv-claude.azienda.it --token IL-TOKEN
+```
+
+Incolla il blocco `env` in `~/.claude/settings.json` della postazione e **riavvia Claude Code**:
+le variabili si leggono all'avvio, le sessioni già aperte non esportano nulla.
+
+Se il token manca, l'esportatore prende un 401, ritenta in silenzio e smette: nessun errore da
+nessuna parte, solo telemetria che non arriva. È l'unico modo in cui questa installazione può
+fallire senza dirlo, quindi il passo 5 non è facoltativo.
+
+**3. Una volta per tutte, invece che postazione per postazione.** Le stesse chiavi messe nel file
+di configurazione centralizzato valgono per tutti e non sono modificabili da chi usa la macchina.
+Percorsi verificati sul binario 2.1.227:
+
+| Sistema | File |
+|---|---|
+| Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
+| macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
+| Linux | `/etc/claude-code/managed-settings.json` |
+
+Accanto a ciascuno, una cartella `managed-settings.d/` i cui file `.json` vengono uniti: comoda
+per distribuire il solo blocco della telemetria senza toccare il resto. Su Windows c'è anche la
+via del registro, `HKLM\SOFTWARE\Policies\ClaudeCode`, valore `Settings` — quella distribuibile
+per criterio di gruppo.
+
+**4. L'agente.** Prima a vuoto, per vedere cosa uscirebbe:
+
+```bat
+python cm_agent.py --endpoint http://srv-claude.azienda.it:4318 --token IL-TOKEN --dry-run
+python cm_agent.py --show-payload --dry-run     :: il JSON esatto, campo per campo
+```
+
+Poi il primo invio vero, che manda **tutto lo storico** sul disco — su una macchina con mesi di
+transcript sono decine di sessioni e qualche secondo:
+
+```bat
+python cm_agent.py --endpoint http://srv-claude.azienda.it:4318 --token IL-TOKEN --once
+```
+
+E infine il servizio, che gira come l'utente e non come servizio di macchina: i transcript stanno
+dentro il profilo della persona, e un servizio di sistema non li vedrebbe.
+
+```bat
+python cm_agent.py --setup-service --endpoint http://srv-claude.azienda.it:4318 --token IL-TOKEN
+```
+
+**5. Verifica dal raccoglitore**, non dalla postazione:
+
+```bat
+python cm_collector.py --status
+```
+
+La postazione nuova deve comparire con **due** tempi recenti: quando ha parlato l'agente e quando
+è arrivata la telemetria. Se manca il secondo, Claude Code non è stato riavviato o il token nel
+blocco `env` non c'è.
 
 ### Cosa arriva
 
@@ -417,22 +562,6 @@ carla@x.it      90,00€         $12.00    <0,1×
 Il totale della colonna *Hai pagato* copre tutte le postazioni, ferme comprese: sommare le righe
 visibili darebbe una cifra più bassa e farebbe sparire proprio i soldi spesi per niente.
 
-### Tenerlo acceso
-
-Un raccoglitore fermo **non lascia traccia**: l'esportatore ritenta per poco e poi lascia
-perdere, e i dati di quell'intervallo non si recuperano. Avviato a mano da un terminale muore
-con quel terminale, quindi va installato come servizio:
-
-```bat
-python cm_collector.py --setup-service
-```
-
-stampa il comando giusto per il sistema in uso — attività pianificata su Windows, unità systemd
-altrove. Per un gruppo di lavoro il raccoglitore sta su **una** macchina in sede, installato
-come servizio di sistema e con `--host` aperto oltre `127.0.0.1`; le postazioni gli mandano i
-dati e non ricevono connessioni da nessuno. Appena apri alla rete serve `--token`, altrimenti
-chiunque può scrivere in archivio: l'avvio te lo dice.
-
 ### La terza fonte: l'export di fatturazione
 
 Telemetria e transcript misurano il **consumo**. La console Anthropic è l'unica che sa la
@@ -483,7 +612,11 @@ riceve il documento non deve chiedere a te che cosa ha in mano.
 
 ```bat
 python cm_collector.py --status
+python cm_collector.py --status --host srv-claude.azienda.it --token IL-TOKEN
 ```
+
+Il token serve anche qui: senza, un raccoglitore protetto risulterebbe spento invece che
+protetto — e sono due diagnosi opposte.
 
 Risponde in una schermata: raccoglitore raggiungibile, quanti dati ci sono, e per ogni postazione
 **quando ha parlato l'agente** e **quando è arrivata la telemetria**. Sono due cose diverse che è
@@ -495,6 +628,54 @@ tace da più di un giorno, e una che manda telemetria ma non ha l'agente, quindi
 totali ma non allo storico né alle commesse. In entrambi i casi i numeri *sembrano* bassi invece
 di essere dichiaratamente parziali. Esce con codice 1 se trova qualcosa, così si può mettere in
 un controllo automatico.
+
+### Gestire le postazioni, dopo il primo giorno
+
+**Arriva una persona.** Ripeti la *parte seconda* sulla sua macchina; sul raccoglitore non c'è
+niente da fare, la postazione si presenta da sé al primo invio. Ricordati `seats` nella scheda
+**Team** della configurazione: se non lo alzi, la nuova persona risulta usare una postazione che
+nessuno paga.
+
+**Se ne va una persona.** Togli il collegamento in Esecuzione automatica (`explorer shell:startup`)
+e il blocco `env` dal suo `settings.json`. I suoi dati **restano in archivio**, ed è voluto: sono
+lo storico dei mesi che ha lavorato, e cancellarli falserebbe i totali passati. Abbassa `seats`.
+
+**Quando invece i dati vanno cancellati davvero** — richiesta dell'interessato, fine del periodo
+di conservazione:
+
+```bat
+python cm_collector.py --dimentica anna@azienda.it --db cm-team.db --key chiavi\cm-pseudonimi.key
+```
+
+Cancella da tutte e tre le tabelle: telemetria, sessioni e fatturazione importata. L'indirizzo si
+può passare così com'è anche quando in archivio non c'è: viene prima ridotto al codice con la
+stessa chiave che l'ha scritto, e il livello viene letto dall'archivio invece di essere accettato
+da chi lancia il comando. Senza la chiave giusta il comando **si ferma** invece di calcolare un
+codice diverso e cancellare zero righe dicendo che ha finito.
+
+**Aggiornare il codice.** `git pull` nella cartella condivisa, poi riavvia gli agenti (o aspetta
+il prossimo accesso). Lo stato in `%LOCALAPPDATA%\claude-monitor\agent.json` non va toccato:
+contiene l'identificativo della postazione e cosa è già stato spedito. Cancellarlo fa comparire
+la stessa macchina come una postazione nuova, con lo storico duplicato.
+
+**Cambia l'indirizzo del raccoglitore.** Due punti su ogni postazione, ed entrambi vanno fatti:
+`OTEL_EXPORTER_OTLP_ENDPOINT` nel `settings.json`, e il collegamento dell'agente. Dimenticarne
+uno lascia metà dei dati che arrivano e metà no, che è più difficile da notare del silenzio
+completo.
+
+**Quando qualcosa smette di arrivare.** `--status` dice *chi*, questa tabella dice *perché*:
+
+| Cosa vedi | Di solito è |
+|---|---|
+| Postazione sparita del tutto | macchina spenta, oppure ferie: guarda la data dell'ultimo invio |
+| Agente muto, telemetria viva | collegamento in Esecuzione automatica rimosso, o cartella di rete non raggiungibile |
+| Telemetria muta, agente vivo | Claude Code non riavviato dopo il blocco `env`, o token mancante nell'intestazione |
+| Nessuno manda più niente, tutti insieme | il raccoglitore è fermo, o è cambiato l'indirizzo |
+| Una persona compare due volte | agent.json cancellato, oppure indirizzo dell'account diverso da quello in fattura |
+
+**Spegnere tutto.** Togli il blocco `env` e riavvia Claude Code, cancella i collegamenti, ferma
+il raccoglitore. L'archivio resta finché non lo cancelli: è un file, `cm-team.db`, insieme ai due
+file di servizio `-wal` e `-shm` che vanno cancellati con lui.
 
 ### Quanto grande può essere il gruppo
 

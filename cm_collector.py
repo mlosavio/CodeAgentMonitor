@@ -17,6 +17,10 @@ protobuf e non serve alcuna libreria esterna: solo stdlib, come claude_monitor.p
     GET  /api/summary   riepilogo in JSON
     GET  /healthz       stato del servizio
 
+Con --token il token serve su tutte le rotte, non solo in scrittura: il
+cruscotto dice quanto consuma ogni postazione. In lettura si accetta anche
+come "?token=...", perche' un browser non manda intestazioni.
+
 Uso rapido:
     python cm_collector.py                       # avvia su 127.0.0.1:4318
     python cm_collector.py --port 4318 --db team.db
@@ -41,6 +45,8 @@ import sqlite3
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1153,16 +1159,24 @@ class Handler(BaseHTTPRequestHandler):
     # -- rotte ------------------------------------------------------------- #
 
     def _autorizzato(self) -> bool:
-        """Con --token, ogni invio deve portarlo. Senza, si accetta tutto.
+        """Con --token, ogni richiesta deve portarlo. Senza, si accetta tutto.
 
         Finche' l'ascolto e' su 127.0.0.1 il token non serve. Appena si apre
         alla rete per far scrivere le altre macchine, serve: un raccoglitore
-        senza autenticazione accetta numeri da chiunque li mandi.
+        senza autenticazione accetta numeri da chiunque li mandi — e, cosa
+        meno evidente, li mostra a chiunque li chieda. Vale quindi anche per
+        le rotte in lettura: il cruscotto dice quanto consuma ogni postazione.
+
+        In lettura il token si puo' passare anche come "?token=", perche' un
+        browser non manda intestazioni: senza quella via l'unico modo di
+        guardare il cruscotto sarebbe lasciarlo aperto a tutti.
         """
         if not self.token:
             return True
-        atteso = f"Bearer {self.token}"
-        return self.headers.get("Authorization", "") == atteso
+        if self.headers.get("Authorization", "") == f"Bearer {self.token}":
+            return True
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        return self.token in query.get("token", ())
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0].rstrip("/")
@@ -1228,6 +1242,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
+
+        if not self._autorizzato():
+            self._json(401, {"error": "token mancante o errato",
+                             "come": "aggiungi ?token=... all'indirizzo"})
+            return
 
         if path == "/healthz":
             self._json(200, {
@@ -1382,9 +1401,15 @@ La pagina si aggiorna da sola ogni 30 secondi.</footer>
 # --------------------------------------------------------------------------- #
 
 
-def setup_env(endpoint: str) -> dict:
-    """Variabili d'ambiente che attivano l'esportazione verso questo raccoglitore."""
-    return {
+def setup_env(endpoint: str, token: str | None = None) -> dict:
+    """Variabili d'ambiente che attivano l'esportazione verso questo raccoglitore.
+
+    Col token, l'intestazione va aggiunta anche qui: l'esportatore di Claude Code
+    e' un client HTTP come l'agente, e senza credenziale si prende un 401. Che
+    pero' non si vede da nessuna parte — l'esportatore ritenta in silenzio e
+    smette — quindi la telemetria sparirebbe senza un errore da nessuna parte.
+    """
+    env = {
         # Interruttore generale.
         "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
         # Solo metriche: gli eventi (logs) possono contenere testo e non servono.
@@ -1410,6 +1435,9 @@ def setup_env(endpoint: str) -> dict:
         "OTEL_METRICS_INCLUDE_SESSION_ID": "true",
         "OTEL_METRICS_INCLUDE_VERSION": "true",
     }
+    if token:
+        env["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Bearer {token}"
+    return env
 
 
 def relazione_markdown(store: Store, team: dict,
@@ -1537,7 +1565,7 @@ def h_ago(quando: float | None) -> str:
     return f"{int(d // 86400)}g fa"
 
 
-def print_status(store: Store, endpoint: str) -> int:
+def print_status(store: Store, endpoint: str, token: str | None = None) -> int:
     """Sta funzionando? Risposta in una schermata, senza scavare.
 
     Distingue due cose che si confondono facilmente: quando una persona ha
@@ -1550,10 +1578,22 @@ def print_status(store: Store, endpoint: str) -> int:
     print("=" * 68)
 
     try:
-        with urllib.request.urlopen(endpoint.rstrip("/") + "/healthz",
-                                    timeout=5) as r:
+        # Anche la lettura vuole il token: senza, un raccoglitore protetto
+        # risulterebbe spento invece che protetto.
+        req = urllib.request.Request(endpoint.rstrip("/") + "/healthz")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, timeout=5) as r:
             salute = json.loads(r.read().decode() or "{}")
         print(f"  raccoglitore   {endpoint}  attivo (v{salute.get('versione')})")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            print(f"  raccoglitore   {endpoint}  attivo, ma rifiuta il token")
+            problemi.append("il token passato non e' quello con cui gira il "
+                            "raccoglitore")
+        else:
+            print(f"  raccoglitore   {endpoint}  errore {exc.code}")
+            problemi.append(f"il raccoglitore risponde {exc.code}")
     except Exception as exc:
         print(f"  raccoglitore   {endpoint}  NON RAGGIUNGIBILE ({exc})")
         problemi.append("il raccoglitore non risponde: gli invii vanno persi "
@@ -1608,6 +1648,45 @@ def print_status(store: Store, endpoint: str) -> int:
         return 1
     print("Nessun problema rilevato.")
     return 0
+
+
+def dimentica(store: Store, chi: str, keyfile: str = "cm-pseudonimi.key") -> dict:
+    """Cancella dall'archivio tutto quello che riguarda una persona.
+
+    Accetta l'indirizzo di posta oppure il codice gia' pseudonimizzato. La
+    distinzione conta: con il livello pseudonimo l'archivio non contiene
+    l'indirizzo, quindi cercarlo cosi' com'e' non troverebbe niente — e la
+    cancellazione sembrerebbe fatta senza aver tolto una riga. L'indirizzo va
+    prima ridotto con la stessa chiave che l'ha scritto.
+
+    Il livello si legge dall'archivio e non si accetta da chi chiama: e' quello
+    con cui i dati sono stati scritti, e sbagliarlo qui non darebbe un errore
+    ma una cancellazione a vuoto.
+
+    Le sessioni spedite dall'agente stanno su una postazione, non solo su una
+    persona: si cancellano per user_key, che e' cio' che le lega a qualcuno.
+    """
+    chiave = chi
+    if "@" in chi and store.level != "nominativo":
+        if store.level == "aggregato":
+            return {"chiave": None}
+        if not os.path.exists(keyfile):
+            # Senza la chiave, make_privacy ne creerebbe una nuova e il codice
+            # calcolato sarebbe un altro: zero righe cancellate, nessun errore.
+            raise FileNotFoundError(
+                f"serve la chiave con cui e' stato scritto l'archivio: {keyfile}")
+        riduci = make_privacy(store.level, keyfile)
+        chiave = riduci({"user_key": chi, "attrs": {}})["user_key"]
+    fuori = {"chiave": chiave}
+    if chiave is None:
+        return fuori
+    with store.lock:
+        for tabella in ("points", "sessions", "billing"):
+            cur = store.con.execute(
+                f"DELETE FROM {tabella} WHERE user_key = ?", (chiave,))
+            fuori[tabella] = cur.rowcount
+        store.con.commit()
+    return fuori
 
 
 def print_service(host: str, port: int, db: str, privacy: str) -> None:
@@ -1672,17 +1751,37 @@ def print_service(host: str, port: int, db: str, privacy: str) -> None:
     print("sistema, non dell'utente, e --host va aperto oltre 127.0.0.1.")
 
 
-def print_setup(endpoint: str) -> None:
-    env = setup_env(endpoint)
+def print_setup(endpoint: str, token: str | None = None) -> None:
+    env = setup_env(endpoint, token)
     print("Configurazione da applicare a Claude Code")
     print("=" * 60)
     print()
+    # --host e' l'indirizzo su cui il raccoglitore ASCOLTA; qui serve quello a
+    # cui le postazioni si COLLEGANO. Coincidono in locale, non appena si apre
+    # alla rete: 0.0.0.0 significa "tutte le interfacce" e non e' raggiungibile.
+    if endpoint.startswith(("http://0.0.0.0", "http://::", "http://[::]")):
+        print("ATTENZIONE: 0.0.0.0 e' l'indirizzo di ascolto, non uno a cui")
+        print("collegarsi. Rilancia con il nome o l'IP con cui le postazioni")
+        print("raggiungono questa macchina, per esempio:")
+        print("  python cm_collector.py --setup --host srv-claude.azienda.it")
+        print()
     print("In ~/.claude/settings.json, blocco \"env\":")
     print()
     print(json.dumps({"env": env}, indent=2, ensure_ascii=False))
     print()
     print("Poi RIAVVIA Claude Code: le variabili si leggono all'avvio.")
     print()
+    if token:
+        print("L'intestazione porta il token, quindi chi usa la postazione lo")
+        print("puo' leggere: autorizza a scrivere in archivio, non a leggerlo.")
+        print("Senza, l'esportatore prende 401, ritenta in silenzio e smette —")
+        print("nessun errore da nessuna parte, solo telemetria che non arriva.")
+        print()
+    elif not endpoint.startswith(("http://127.0.0.1", "http://localhost")):
+        print("Il raccoglitore non e' in locale ma qui non c'e' nessun token.")
+        print("Se lo hai avviato con --token, rilancia questo comando con lo")
+        print("stesso --token, altrimenti la telemetria verra' rifiutata.")
+        print()
     print("Per il team, le stesse chiavi vanno nel file di configurazione")
     print("centralizzato non modificabile dall'utente (managed-settings.json),")
     print("cosi' la configurazione non dipende dalla buona volonta' di ciascuno.")
@@ -1789,13 +1888,15 @@ def serve(store: Store, host: str, port: int, verbose: bool,
     print(f"cm-collector {__version__} in ascolto su http://{host}:{port}")
     print(f"  archivio     {os.path.abspath(store.path)}")
     print(f"  riservatezza {store.level} — {nota}")
-    print(f"  cruscotto    http://{host}:{port}/")
+    coda = f"?token={token}" if token else ""
+    print(f"  cruscotto    http://{host}:{port}/{coda}")
     print(f"  ingresso     http://{host}:{port}/v1/metrics")
     if token:
-        print("  accesso      protetto da token")
+        print("  accesso      protetto da token, in scrittura e in lettura")
     elif host not in ("127.0.0.1", "localhost"):
         print("  ATTENZIONE   in ascolto sulla rete senza token: chiunque puo'")
-        print("               scrivere in archivio. Usa --token.")
+        print("               scrivere in archivio, e leggere il cruscotto.")
+        print("               Usa --token.")
     print()
     print("Ctrl+C per fermare.")
     try:
@@ -1848,6 +1949,9 @@ def main(argv=None) -> int:
                     help="stato della catena: chi manda, chi e' fermo")
     ap.add_argument("--setup-service", action="store_true",
                     help="stampa come installare il raccoglitore come servizio")
+    ap.add_argument("--dimentica", metavar="CHI",
+                    help="cancella dall'archivio una persona, per indirizzo "
+                         "o per codice")
     ap.add_argument("--privacy", default="pseudonimo", choices=PRIVACY_LEVELS,
                     help="livello di dettaglio sulle persone (default: pseudonimo)")
     ap.add_argument("--key", default="cm-pseudonimi.key",
@@ -1860,7 +1964,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.setup:
-        print_setup(f"http://{args.host}:{args.port}")
+        print_setup(f"http://{args.host}:{args.port}", args.token)
         return 0
 
     if args.setup_service:
@@ -1915,8 +2019,32 @@ def main(argv=None) -> int:
                 print(f"  · {r['person']}")
         return 1 if (orfani or muti) else 0
 
+    if args.dimentica:
+        # Aperto senza funzione di riservatezza: cancellare non deve poter
+        # cambiare il livello dichiarato dell'archivio, che viene letto da li'.
+        store = Store(args.db)
+        try:
+            esito = dimentica(store, args.dimentica, args.key)
+        except FileNotFoundError as exc:
+            print(exc)
+            return 1
+        if esito["chiave"] is None:
+            print("livello aggregato: in archivio non c'e' niente di attribuibile"
+                  " a una persona.")
+            return 0
+        tolte = sum(v for k, v in esito.items() if k != "chiave")
+        print(f"{args.dimentica} -> {esito['chiave']}  (livello {store.level})")
+        for tabella in ("points", "sessions", "billing"):
+            print(f"  {tabella:10s} {esito.get(tabella, 0):>6d} righe cancellate")
+        if not tolte:
+            print("\nNessuna riga trovata: o la persona non c'era, o la chiave"
+                  " usata\nnon e' quella con cui l'archivio e' stato scritto.")
+            return 1
+        return 0
+
     if args.status:
-        return print_status(Store(args.db), f"http://{args.host}:{args.port}")
+        return print_status(Store(args.db), f"http://{args.host}:{args.port}",
+                            args.token)
 
     if args.relazione:
         cfg = {}

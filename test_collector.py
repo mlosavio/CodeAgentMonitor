@@ -309,6 +309,38 @@ s.add([punto("claude_code.cost.usage", 1.0, 1, 1000.0, "mario@azienda.it", "s1")
 verifica("aggregato: nessuna identita conservata",
          cc.team_rows(s)[0]["person"], "(non identificato)")
 
+# Cancellazione di una persona: si chiede per indirizzo, ma in archivio c'e' il
+# codice. Se la riduzione non avvenisse, non si troverebbe niente e sembrerebbe
+# fatta — il modo peggiore in cui una cancellazione puo' fallire.
+d = tempfile.mkdtemp()
+chiave = os.path.join(d, "k.key")
+s = cc.Store(os.path.join(d, "t.db"), cc.make_privacy("pseudonimo", chiave),
+             "pseudonimo")
+s.add([punto("claude_code.cost.usage", 1.0, 1, 1000.0, "mario@azienda.it", "s1"),
+       punto("claude_code.cost.usage", 2.0, 1, 1001.0, "lucia@azienda.it", "s2")])
+s.add_sessions("m-1", [{"session_id": "s1", "project": "P", "start": 1.0,
+                        "end": 2.0, "cost": 5.0}], "mario@azienda.it")
+esito = cc.dimentica(s, "mario@azienda.it", chiave)
+verifica("cancellazione: indirizzo ridotto al codice",
+         esito["chiave"].startswith("p-"), True)
+verifica("cancellazione: datapoint tolti", esito["points"], 1)
+verifica("cancellazione: sessioni tolte", esito["sessions"], 1)
+rimasti = [r["person"] for r in cc.team_rows(s)]
+verifica("cancellazione: gli altri restano", len(rimasti), 1)
+verifica("cancellazione: non resta traccia del cancellato",
+         esito["chiave"] in rimasti, False)
+
+# Senza la chiave giusta make_privacy ne creerebbe una nuova, calcolerebbe un
+# codice diverso e cancellerebbe zero righe senza dirlo: deve fermarsi prima.
+try:
+    cc.dimentica(s, "lucia@azienda.it", os.path.join(d, "inesistente.key"))
+    fermato = False
+except FileNotFoundError:
+    fermato = True
+verifica("cancellazione senza chiave: si ferma invece di fingere", fermato, True)
+verifica("cancellazione senza chiave: non ha tolto niente",
+         len(cc.team_rows(s)), 1)
+
 # --------------------------------------------------------------------------- #
 
 print("\nConfine di cio' che esce dalla macchina (cm_agent)")

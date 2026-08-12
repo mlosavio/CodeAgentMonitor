@@ -63,7 +63,11 @@ def posta(url: str, corpo: dict, token: str | None = TOKEN) -> tuple[int, dict]:
         return exc.code, {}
 
 
-def prendi(url: str):
+def prendi(url: str, token: str | None = TOKEN):
+    # Il token vale anche in lettura: il cruscotto dice quanto consuma ognuno.
+    # Come lo manda un browser, cioe' nell'indirizzo, non in un'intestazione.
+    if token:
+        url += ("&" if "?" in url else "?") + "token=" + token
     with urllib.request.urlopen(url, timeout=10) as r:
         grezzo = r.read().decode()
     try:
@@ -154,6 +158,39 @@ try:
     codice, _ = posta(f"{base}/v1/sessions", {"machine": "x", "sessions": []},
                       token="sbagliato")
     verifica("con token sbagliato viene rifiutato", codice, 401)
+
+    # Il token vale anche per la telemetria, che e' un client HTTP come l'agente.
+    # Se non lo mandasse, l'esportatore prenderebbe 401 e smetterebbe in
+    # silenzio: nessun errore, solo dati che non arrivano piu'.
+    # Il datapoint e' identico a uno che verra' mandato piu' avanti: se passa,
+    # la deduplicazione lo assorbe e i totali restano quelli attesi. Cosi' la
+    # prova non inventa una quarta postazione per poterla verificare.
+    tel_prova = datapoint("claude_code.cost.usage", SOLO_TELEMETRIA[1],
+                          SOLO_TELEMETRIA[0], "s-c1")
+    codice, _ = posta(f"{base}/v1/metrics", tel_prova, token=None)
+    verifica("telemetria senza token rifiutata", codice, 401)
+
+    # E l'intestazione che stampiamo alle postazioni deve essere esattamente
+    # quella che il raccoglitore si aspetta: e' la stessa stringa, non due
+    # stringhe che si somigliano.
+    intestazione = cc.setup_env("http://x:4318", TOKEN).get(
+        "OTEL_EXPORTER_OTLP_HEADERS", "")
+    nome, _, valore = intestazione.partition("=")
+    verifica("la configurazione stampata porta il token", nome, "Authorization")
+
+    # In lettura serve altrettanto: aprire il raccoglitore alla rete senza
+    # proteggere il cruscotto lo renderebbe leggibile da chiunque sia in rete.
+    try:
+        prendi(f"{base}/api/team", token=None)
+        letto = True
+    except urllib.error.HTTPError as exc:
+        letto = exc.code
+    verifica("cruscotto non leggibile senza token", letto, 401)
+    verifica("leggibile con ?token= nell'indirizzo",
+             isinstance(prendi(f"{base}/api/team"), dict), True)
+    codice, _ = posta(f"{base}/v1/metrics", tel_prova,
+                      token=valore.replace("Bearer ", ""))
+    verifica("con quella intestazione la telemetria passa", codice, 200)
 
     print("\nInvii dalle postazioni")
     print("-" * 72)
