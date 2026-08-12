@@ -32,9 +32,11 @@ livello si impone qui, prima della scrittura in archivio. Default: pseudonimo.
 from __future__ import annotations
 
 import argparse
+import csv
 import gzip
 import json
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -311,6 +313,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS points_dedup
 CREATE INDEX IF NOT EXISTS points_metric_ts ON points(metric, ts);
 CREATE INDEX IF NOT EXISTS points_user      ON points(user_key);
 CREATE INDEX IF NOT EXISTS points_session   ON points(session_id);
+
+-- Fatturazione importata dall'export della console Anthropic. E' la terza
+-- fonte, e l'unica autorevole sulla spesa: le altre due misurano il consumo.
+CREATE TABLE IF NOT EXISTS billing (
+    period    TEXT NOT NULL,     -- AAAA-MM
+    user_key  TEXT NOT NULL,
+    cost      REAL,
+    currency  TEXT,
+    tokens    REAL,
+    origine   TEXT,              -- da quale file, per poter risalire
+    imported  REAL NOT NULL,
+    PRIMARY KEY (period, user_key)
+);
 
 -- Sessioni ricavate dai transcript e spedite da cm_agent.py. Sono una fonte
 -- diversa dai datapoint: coprono anche il passato, perche' i transcript sono
@@ -766,6 +781,188 @@ def projects_of(store: Store, persona: str,
             "last": r["ultimo"] or 0.0,
         })
     return righe
+
+
+# --------------------------------------------------------------------------- #
+# Import della fatturazione dalla console
+# --------------------------------------------------------------------------- #
+#
+# Il formato dell'export non e' documentato e cambia. Invece di presumerlo, le
+# colonne si riconoscono dalle intestazioni: cosi' il giorno che cambia nome a
+# una colonna si aggiunge un sinonimo qui, invece di riscrivere l'import. Quello
+# che viene riconosciuto viene sempre stampato, perche' un import che indovina
+# in silenzio e' peggio di uno che si rifiuta di partire.
+
+# Per ogni ruolo le parole sono in ordine di preferenza, non alfabetico. Conta
+# soprattutto per l'identita': un export con sia "Member" (il nome per esteso)
+# sia "Email" deve prendere l'indirizzo, altrimenti la persona non combacia con
+# quella che manda la telemetria e comparirebbe come due postazioni distinte.
+SINONIMI = {
+    "user":     ("email", "e-mail", "mail", "user", "utente", "actor",
+                 "account", "member", "membro", "persona", "seat"),
+    "cost":     ("cost", "costo", "spend", "spesa", "amount", "importo",
+                 "charge", "addebito", "total", "totale"),
+    "period":   ("period", "periodo", "month", "mese", "billing", "date",
+                 "data", "day", "giorno"),
+    "currency": ("currency", "valuta", "cur"),
+    "tokens":   ("token", "tokens"),
+}
+
+
+def riconosci_colonne(intestazioni: list[str]) -> dict[str, str]:
+    """Intestazione -> ruolo, per corrispondenza sul nome.
+
+    Vince la parola piu' preferita per quel ruolo, non la colonna che capita
+    prima nel file: l'ordine delle colonne in un export non significa niente,
+    quello dei sinonimi si'.
+    """
+    fuori: dict[str, str] = {}
+    presi: set[str] = set()
+    for ruolo, parole in SINONIMI.items():
+        migliore, punteggio = None, len(parole)
+        for testa in intestazioni:
+            if testa in presi:
+                continue
+            pulita = (testa or "").strip().lower()
+            for i, p in enumerate(parole):
+                if p in pulita and i < punteggio:
+                    migliore, punteggio = testa, i
+                    break
+        if migliore is not None:
+            fuori[ruolo] = migliore
+            presi.add(migliore)
+    return fuori
+
+
+def periodo_di(valore: str) -> str | None:
+    """AAAA-MM da una data scritta in uno dei modi consueti."""
+    v = (valore or "").strip()
+    if not v:
+        return None
+    m = re.match(r"^(\d{4})[-/](\d{1,2})", v)               # 2026-08, 2026/8
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}"
+    m = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})", v)  # 12/08/2026
+    if m:
+        return f"{m.group(3)}-{int(m.group(2)):02d}"
+    m = re.match(r"^(\d{1,2})[-/](\d{4})$", v)              # 07/2026
+    if m:
+        return f"{m.group(2)}-{int(m.group(1)):02d}"
+    m = re.match(r"^(\d{4})(\d{2})$", v)                    # 202608
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    return None
+
+
+def numero_di(valore: str) -> float | None:
+    """Un importo scritto all'italiana o all'americana, senza indovinare."""
+    v = (valore or "").strip().replace("$", "").replace("€", "").replace(" ", "")
+    if not v:
+        return None
+    # 1.234,56 -> il punto e' separatore di migliaia; 1,234.56 -> il contrario
+    if "," in v and "." in v:
+        v = (v.replace(".", "").replace(",", ".") if v.rfind(",") > v.rfind(".")
+             else v.replace(",", ""))
+    elif "," in v:
+        v = v.replace(",", ".") if len(v.split(",")[-1]) <= 2 else v.replace(",", "")
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
+def import_csv(store: Store, path: str,
+               mappa: dict[str, str] | None = None) -> tuple[int, list[str]]:
+    """Carica l'export di fatturazione. Restituisce (righe, avvisi)."""
+    avvisi: list[str] = []
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        campione = fh.read(8192)
+        fh.seek(0)
+        try:
+            dialetto = csv.Sniffer().sniff(campione, delimiters=",;\t")
+        except csv.Error:
+            dialetto = csv.excel
+            avvisi.append("separatore non riconosciuto: assumo la virgola")
+        lettore = csv.DictReader(fh, dialect=dialetto)
+        intestazioni = lettore.fieldnames or []
+        ruoli = dict(riconosci_colonne(intestazioni))
+        if mappa:
+            ruoli.update(mappa)
+
+        if "user" not in ruoli or "cost" not in ruoli:
+            mancanti = [r for r in ("user", "cost") if r not in ruoli]
+            raise ValueError(
+                f"non riconosco le colonne {mancanti} fra {intestazioni}. "
+                f"Indicale con --map user=NOME,cost=NOME")
+
+        now = time.time()
+        righe = []
+        senza_periodo = 0
+        for r in lettore:
+            utente = (r.get(ruoli["user"]) or "").strip()
+            costo = numero_di(r.get(ruoli["cost"]) or "")
+            if not utente or costo is None:
+                continue
+            periodo = None
+            if "period" in ruoli:
+                periodo = periodo_di(r.get(ruoli["period"]) or "")
+            if not periodo:
+                senza_periodo += 1
+                periodo = time.strftime("%Y-%m")
+            p = store.privacy({"user_key": utente,
+                               "attrs": {"user.email": utente}})
+            righe.append((periodo, p["user_key"], costo,
+                          (r.get(ruoli.get("currency", "")) or "").strip() or None,
+                          numero_di(r.get(ruoli.get("tokens", "")) or ""),
+                          os.path.basename(path), now))
+
+    if senza_periodo:
+        avvisi.append(f"{senza_periodo} righe senza data leggibile: "
+                      f"attribuite al mese corrente")
+
+    with store.lock:
+        store.con.executemany(
+            "INSERT INTO billing (period, user_key, cost, currency, tokens,"
+            " origine, imported) VALUES (?,?,?,?,?,?,?)"
+            " ON CONFLICT(period, user_key) DO UPDATE SET"
+            "   cost=excluded.cost, currency=excluded.currency,"
+            "   tokens=excluded.tokens, origine=excluded.origine,"
+            "   imported=excluded.imported", righe)
+        store.con.commit()
+    return (len(righe), avvisi)
+
+
+def riconciliazione(store: Store) -> list[dict]:
+    """Confronto fra quello che la console ha fatturato e quello che misuriamo.
+
+    Le due cifre NON devono coincidere e non e' un errore: la console fattura
+    la quota, noi misuriamo il consumo a valore di listino. Quello che conta e'
+    che ci sia una riga per ogni persona in entrambe le fonti — una presenza da
+    una parte sola e' il segnale che qualcosa non sta arrivando.
+    """
+    fuori: dict[str, dict] = {}
+    for r in store.query(
+        "SELECT user_key, period, SUM(cost) AS costo FROM billing"
+        " GROUP BY user_key, period"
+    ):
+        slot = fuori.setdefault(r["user_key"], {
+            "person": r["user_key"], "fatturato": 0.0, "periodi": set(),
+            "misurato": 0.0, "presente_in": set()})
+        slot["fatturato"] += r["costo"] or 0.0
+        slot["periodi"].add(r["period"])
+        slot["presente_in"].add("console")
+    for riga in team_rows(store):
+        slot = fuori.setdefault(riga["person"], {
+            "person": riga["person"], "fatturato": 0.0, "periodi": set(),
+            "misurato": 0.0, "presente_in": set()})
+        slot["misurato"] += riga["cost"]
+        slot["presente_in"].add(riga["source"])
+    for slot in fuori.values():
+        slot["periodi"] = sorted(slot["periodi"])
+        slot["solo_console"] = slot["presente_in"] == {"console"}
+        slot["mai_fatturato"] = "console" not in slot["presente_in"]
+        slot["presente_in"] = sorted(slot["presente_in"])
+    return sorted(fuori.values(), key=lambda s: s["misurato"], reverse=True)
 
 
 def projects_total(store: Store, since: float | None = None) -> list[dict]:
@@ -1611,6 +1808,13 @@ def main(argv=None) -> int:
     ap.add_argument("--since", help="finestra temporale, es. 7d, 24h, 30m")
     ap.add_argument("--setup", action="store_true",
                     help="stampa la configurazione da applicare a Claude Code")
+    ap.add_argument("--import-csv", metavar="FILE",
+                    help="carica l'export di fatturazione della console")
+    ap.add_argument("--map", default="", metavar="RUOLO=COLONNA,...",
+                    help="corregge il riconoscimento delle colonne, "
+                         "es. user=Member,cost=Amount")
+    ap.add_argument("--riconcilia", action="store_true",
+                    help="confronta la fatturazione con quello che misuriamo")
     ap.add_argument("--relazione", nargs="?", const="-", metavar="FILE",
                     help="riepilogo in Markdown da portare a una riunione "
                          "(senza FILE stampa a schermo)")
@@ -1636,6 +1840,54 @@ def main(argv=None) -> int:
     if args.setup_service:
         print_service(args.host, args.port, args.db, args.privacy)
         return 0
+
+    if args.import_csv:
+        mappa = {}
+        for pezzo in args.map.split(","):
+            if "=" in pezzo:
+                k, _, v = pezzo.partition("=")
+                mappa[k.strip()] = v.strip()
+        store = Store(args.db, make_privacy(args.privacy, args.key), args.privacy)
+        try:
+            n, avvisi = import_csv(store, args.import_csv, mappa or None)
+        except (OSError, ValueError) as exc:
+            print(f"import non riuscito: {exc}")
+            return 1
+        print(f"caricate {n} righe da {args.import_csv}")
+        for a in avvisi:
+            print(f"  avviso: {a}")
+        return 0
+
+    if args.riconcilia:
+        store = Store(args.db)
+        righe = riconciliazione(store)
+        if not righe:
+            print("niente da confrontare: manca sia la fatturazione sia il consumo.")
+            return 0
+        print(f"  {'postazione':22s} {'fatturato':>12s} {'misurato':>12s}  presente in")
+        print("  " + "-" * 66)
+        for r in righe:
+            print(f"  {r['person']:22s} {r['fatturato']:>12,.2f} "
+                  f"{r['misurato']:>12,.2f}  {', '.join(r['presente_in'])}")
+        print()
+        print("Le due cifre non devono coincidere: la console fattura la quota,")
+        print("noi misuriamo il consumo a valore di listino. Conta che ci sia una")
+        print("riga per ogni persona in entrambe le fonti.")
+        orfani = [r for r in righe if r["solo_console"]]
+        muti = [r for r in righe if r["mai_fatturato"]]
+        if orfani:
+            print()
+            print("Fatturate ma senza consumo misurato (postazione ferma, o niente"
+                  " raccoglitore):")
+            for r in orfani:
+                print(f"  · {r['person']}")
+        if muti:
+            print()
+            print("Con consumo misurato ma non presenti nella fatturazione"
+                  " caricata:")
+            for r in muti:
+                print(f"  · {r['person']}")
+        return 1 if (orfani or muti) else 0
 
     if args.status:
         return print_status(Store(args.db), f"http://{args.host}:{args.port}")

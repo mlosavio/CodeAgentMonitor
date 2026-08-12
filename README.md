@@ -430,6 +430,35 @@ come servizio di sistema e con `--host` aperto oltre `127.0.0.1`; le postazioni 
 dati e non ricevono connessioni da nessuno. Appena apri alla rete serve `--token`, altrimenti
 chiunque può scrivere in archivio: l'avvio te lo dice.
 
+### La terza fonte: l'export di fatturazione
+
+Telemetria e transcript misurano il **consumo**. La console Anthropic è l'unica che sa la
+**spesa**. Caricarla chiude il cerchio:
+
+```bat
+python cm_collector.py --import-csv export.csv
+python cm_collector.py --riconcilia
+```
+
+Il formato dell'export non è documentato e cambia, quindi le colonne si riconoscono dai nomi
+delle intestazioni invece di essere presunte: `Email`, `Utente`, `actor_email`, `Total Cost`,
+`Costo`, `amount_usd`, `Period`, `Mese`, `billing_period` sono tutte comprese, e così importi e
+date scritti all'italiana (`1.127,50`, `07/2026`) o all'americana. Se una colonna resta ambigua
+lo dice invece di indovinare, e la si corregge con `--map user=Membro,cost=Importo`.
+
+Fra le colonne dell'identità **l'indirizzo batte il nome per esteso**: è l'unico che combacia con
+quello che manda la telemetria, altrimenti la stessa persona comparirebbe come due postazioni.
+
+`--riconcilia` mette a confronto le due cifre. **Non devono coincidere** — la console fattura la
+quota, noi misuriamo il consumo a valore di listino — e quello che conta è un altro:
+
+| Cosa emerge | Perché serve il confronto |
+|---|---|
+| Fatturata ma senza consumo | Postazione pagata e mai usata, oppure raccoglitore non attivo su quella macchina |
+| Consumo ma non in fattura | Qualcuno lavora su una postazione che nessuno sta pagando, o l'export è parziale |
+
+Nessuna delle due fonti da sola mostra questi casi. Esce con codice 1 se ne trova.
+
 ### Il riepilogo da portare in riunione
 
 ```bat

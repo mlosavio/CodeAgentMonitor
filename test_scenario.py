@@ -288,6 +288,55 @@ try:
     verifica("con il raccoglitore spento lo dice",
              "NON RAGGIUNGIBILE" in buf.getvalue(), True)
 
+    print("\nImport della fatturazione e riconciliazione")
+    print("-" * 72)
+    # Il formato dell'export non e' documentato: le colonne si riconoscono dai
+    # nomi, quindi la prova gira su piu' forme plausibili invece che su una.
+    verifica("preferisce l'indirizzo al nome per esteso",
+             cc.riconosci_colonne(["Member", "Email", "Cost"]).get("user"),
+             "Email")
+    verifica("riconosce intestazioni all'italiana",
+             cc.riconosci_colonne(["Utente", "Costo", "Mese"]),
+             {"user": "Utente", "cost": "Costo", "period": "Mese"})
+    verifica("riconosce nomi tecnici",
+             cc.riconosci_colonne(["actor_email", "amount_usd",
+                                   "billing_period"]).get("cost"),
+             "amount_usd")
+    verifica("legge le date scritte in modi diversi",
+             [cc.periodo_di(v) for v in
+              ("2026-07", "07/2026", "12/08/2026", "202607", "2026-07-01")],
+             ["2026-07"] * 2 + ["2026-08"] + ["2026-07"] * 2)
+    verifica("legge gli importi all'italiana e all'americana",
+             [cc.numero_di(v) for v in ("1.127,50", "1,127.50", "88,20", "€ 12")],
+             [1127.5, 1127.5, 88.2, 12.0])
+
+    csv_path = os.path.join(tempfile.mkdtemp(), "fatture.csv")
+    with open(csv_path, "w", encoding="utf-8", newline="") as fh:
+        fh.write("Member,Email,Total Cost,Period\n")
+        fh.write("Anna,anna@azienda.it,127.50,2026-07\n")
+        fh.write("Bruno,bruno@azienda.it,88.20,2026-07\n")
+        fh.write("Dario,dario@azienda.it,30.00,2026-07\n")   # paga, non consuma
+    n, avvisi = cc.import_csv(store, csv_path)
+    verifica("tre righe caricate", n, 3)
+    verifica("nessun avviso", avvisi, [])
+    # Anche qui l'indirizzo non deve entrare in archivio.
+    verifica("gli indirizzi sono ridotti come le altre fonti",
+             all(str(r["user_key"]).startswith("p-") for r in
+                 store.query("SELECT user_key FROM billing")), True)
+
+    ric = {r["person"]: r for r in cc.riconciliazione(store)}
+    anna_ric = ric[anna["person"]]
+    verifica("anna compare in entrambe le fonti",
+             sorted(anna_ric["presente_in"]), ["console", "transcript"])
+    verifica("con il fatturato della console", anna_ric["fatturato"], 127.50)
+    verifica("e il consumo misurato da noi", anna_ric["misurato"], anna["cost"])
+    # Dario paga una postazione che non usa: e' il caso che il confronto deve
+    # far emergere, perche' nessuna delle due fonti da sola lo mostra.
+    dario = [r for r in ric.values() if r["solo_console"]]
+    verifica("chi paga senza consumare emerge dal confronto", len(dario), 1)
+    verifica("e chi consuma senza comparire in fattura pure",
+             any(r["mai_fatturato"] for r in ric.values()), True)
+
     print("\nRelazione in Markdown")
     print("-" * 72)
     md = cc.relazione_markdown(
