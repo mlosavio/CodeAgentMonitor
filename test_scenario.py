@@ -337,6 +337,23 @@ try:
     verifica("e chi consuma senza comparire in fattura pure",
              any(r["mai_fatturato"] for r in ric.values()), True)
 
+    # Chi e' fatturato e non consuma deve comparire fra le righe, non solo nel
+    # confronto: contarlo dice quante postazioni sono ferme, vederlo dice quali.
+    righe_b = {r["person"]: r for r in cc.team_rows(store)}
+    solo_fattura = [r for r in righe_b.values() if r["source"] == "fatturazione"]
+    verifica("la postazione pagata e mai usata compare fra le righe",
+             len(solo_fattura), 1)
+    verifica("con consumo a zero", solo_fattura[0]["cost"], 0.0)
+    verifica("e il fatturato accanto", solo_fattura[0]["billed"], 30.0)
+    verifica("chi consuma porta con se' il proprio fatturato",
+             righe_b[anna["person"]]["billed"], 127.50)
+    verifica("chi non e' in fattura ha il campo vuoto, non zero",
+             righe_b[carla["person"]]["billed"], None)
+    # Il totale del consumo non deve cambiare per l'arrivo della fatturazione.
+    verifica("l'import non altera il consumo misurato",
+             sum(r["cost"] for r in righe_b.values()),
+             sum(r["cost"] for r in righe.values()))
+
     print("\nRelazione in Markdown")
     print("-" * 72)
     md = cc.relazione_markdown(

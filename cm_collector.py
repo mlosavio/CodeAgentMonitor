@@ -676,11 +676,31 @@ def team_rows(store: Store, since: float | None = None) -> list[dict]:
         # le fonti non conta nulla due volte.
         riga["last"] = max(riga.get("last") or 0.0, ultimi.get(persona, 0.0))
 
+    # 3. Fatturazione. Chi e' fatturato e non consuma NON comparirebbe affatto,
+    #    ed e' proprio la riga che serve vedere: una postazione pagata che non
+    #    lavora. Contarla soltanto, come fa la sottrazione dalle postazioni
+    #    dichiarate, dice quante sono; questo dice quali.
+    for r in store.query(
+        "SELECT user_key AS persona, SUM(cost) AS fatturato,"
+        " MAX(imported) AS quando FROM billing GROUP BY user_key"
+    ):
+        riga = per_persona.get(r["persona"])
+        if riga is None:
+            riga = per_persona[r["persona"]] = {
+                "person": r["persona"], "cost": 0.0, "sessions": 0,
+                "active": 0.0, "projects": 0, "total_tokens": 0.0,
+                "tokens": {v: 0.0 for v in TOKEN_TYPES.values()},
+                "models": [], "last": 0.0, "_quota_locale": 0.0,
+                "source": "fatturazione", "extra": {},
+            }
+        riga["billed"] = r["fatturato"] or 0.0
+
     righe = list(per_persona.values())
     for r in righe:
         r.setdefault("extra", {})
         r.setdefault("projects", 0)
-    righe.sort(key=lambda r: r["cost"], reverse=True)
+        r.setdefault("billed", None)
+    righe.sort(key=lambda r: (r["cost"], r.get("billed") or 0), reverse=True)
     return righe
 
 
@@ -956,11 +976,17 @@ def riconciliazione(store: Store) -> list[dict]:
             "person": riga["person"], "fatturato": 0.0, "periodi": set(),
             "misurato": 0.0, "presente_in": set()})
         slot["misurato"] += riga["cost"]
-        slot["presente_in"].add(riga["source"])
+        # "fatturazione" non e' una fonte di consumo: e' la riga che team_rows
+        # aggiunge proprio per chi non ne ha nessuna. Contarla qui farebbe
+        # sparire il caso che questo confronto esiste per trovare.
+        if riga["source"] != "fatturazione":
+            slot["presente_in"].add(riga["source"])
     for slot in fuori.values():
+        fatturata = "console" in slot["presente_in"]
+        consumo = slot["presente_in"] - {"console"}
         slot["periodi"] = sorted(slot["periodi"])
-        slot["solo_console"] = slot["presente_in"] == {"console"}
-        slot["mai_fatturato"] = "console" not in slot["presente_in"]
+        slot["solo_console"] = fatturata and not consumo   # paga e non lavora
+        slot["mai_fatturato"] = bool(consumo) and not fatturata  # lavora e non paga
         slot["presente_in"] = sorted(slot["presente_in"])
     return sorted(fuori.values(), key=lambda s: s["misurato"], reverse=True)
 

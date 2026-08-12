@@ -1077,6 +1077,8 @@ TEAM_COLUMNS = [
      lambda r: r["person"]),
     ("paid",     "Hai pagato", 100, "e", lambda r: r.get("paid", 0),
      lambda r: r.get("paid_txt", "—")),
+    ("billed",   "Fatturato",   95, "e", lambda r: r.get("billed") or 0,
+     lambda r: r.get("billed_txt", "—")),
     ("cost",     "Se fosse API", 105, "e", lambda r: r["cost"],
      lambda r: Fmt.cost(r["cost"])),
     ("ratio",    "Resa",        65, "e", lambda r: r.get("ratio", 0),
@@ -1164,6 +1166,8 @@ def load_team_rows(config: dict, since: float | None = None):
         for r in righe:
             r["paid_txt"] = team_money(r["paid"], valuta) if r["paid"] else "—"
             r["ratio_txt"] = fmt_ratio(r["ratio"])
+            r["billed_txt"] = (team_money(r["billed"], valuta)
+                               if r.get("billed") is not None else "—")
         return righe, store.level, "", riepilogo
 
     return [], None, ("nessun archivio di team: avvia il raccoglitore con "
@@ -2681,6 +2685,15 @@ class App:
             parti.append(f"{len(sole_tel)} senza storico (manca cm_agent)")
         elif sole_tel:
             parti.append("solo telemetria: manca lo storico precedente")
+        # Fatturate e mai viste: la sottrazione dalle postazioni dichiarate dice
+        # quante sono, questa dice quali — ed e' quello che serve per agire.
+        ferme = [r_ for r_ in righe if r_.get("source") == "fatturazione"]
+        if ferme:
+            parti.append(f"{len(ferme)} fatturate senza alcun consumo")
+        muti = [r_ for r_ in righe
+                if r_.get("billed") is None and r_.get("cost")]
+        if muti and any(r_.get("billed") is not None for r_ in righe):
+            parti.append(f"{len(muti)} consumano ma non sono in fattura")
         if etichetta:
             parti.append(f"riservatezza: {etichetta}")
         if righe:
