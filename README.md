@@ -659,6 +659,11 @@ Se tocchi il raccoglitore, `python test_collector.py` deve restare verde: copre 
 conteggio si sbaglia — invii ritentati, metriche cumulative, totali per gruppo — e il confine di
 riservatezza.
 
+`python test_resilienza.py` spegne e riaccende un raccoglitore vero mentre l'agente spedisce, e
+verifica che un invio fallito **non** faccia avanzare il segnalibro: altrimenti quello che non è
+arrivato risulterebbe spedito e non verrebbe rimandato mai più — una perdita silenziosa, il tipo
+peggiore. `python test_carico.py 50 20` misura cinquanta postazioni concorrenti.
+
 `python test_scenario.py` fa una cosa diversa: avvia un raccoglitore vero su una porta libera e
 ci parla **via rete**, simulando tre postazioni con storici diversi più cinque pagate e mai
 usate. Serve a prendere gli errori che stanno *fra* i pezzi invece che dentro un pezzo — il
