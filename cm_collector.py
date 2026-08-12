@@ -454,6 +454,74 @@ def totals(store: Store, by: str = "all", since: float | None = None) -> dict:
     return out
 
 
+SEP = "\x1f"  # separatore fra chiave e sottochiave, non stampabile
+
+
+def aggregate_pair(store: Store, metric: str, by: str, sub: str,
+                   since: float | None = None) -> dict[str, dict[str, float]]:
+    """Totale incrociato su due assi, es. postazione x tipo di token."""
+    col = f"{GROUP_COLS[by]} || '{SEP}' || {GROUP_COLS[sub]}"
+    extra, args = "", [metric]
+    if since:
+        extra, args = " AND ts >= ?", [metric, since]
+    sql = AGG_SQL.format(group_col=col, extra=extra)
+    out: dict[str, dict[str, float]] = {}
+    for r in store.query(sql, tuple(args)):
+        chiave, _, sottochiave = str(r["gruppo"]).partition(SEP)
+        out.setdefault(chiave, {})[sottochiave] = r["totale"]
+    return out
+
+
+# Nomi dei tipi di token nella telemetria nativa -> campi del monitor.
+# Sono gli stessi valori che il parser dei transcript ricava da usage.
+TOKEN_TYPES = {
+    "input": "input",
+    "output": "output",
+    "cacheRead": "cache_read",
+    "cacheCreation": "cache_creation",
+}
+
+
+def team_rows(store: Store, since: float | None = None) -> list[dict]:
+    """Una riga per postazione, gia' nella forma che il pannello si aspetta.
+
+    Vive qui e non nella GUI perche' sia verificabile da riga di comando:
+        python cm_collector.py --report --by user
+    """
+    tot = totals(store, "user", since)
+    per_tipo = aggregate_pair(store, "claude_code.token.usage", "user", "type", since)
+    per_modello = aggregate_pair(store, "claude_code.cost.usage", "user", "model", since)
+
+    ultimi = {}
+    sql = ("SELECT COALESCE(user_key,'(non identificato)') AS g, MAX(ts) AS ultimo"
+           " FROM points" + (" WHERE ts >= ?" if since else "") + " GROUP BY g")
+    for r in store.query(sql, (since,) if since else ()):
+        ultimi[r["g"]] = r["ultimo"]
+
+    righe = []
+    for persona, vals in tot.items():
+        tok = {v: 0.0 for v in TOKEN_TYPES.values()}
+        for grezzo, val in (per_tipo.get(persona) or {}).items():
+            campo = TOKEN_TYPES.get(grezzo)
+            if campo:
+                tok[campo] += val
+        modelli = sorted(
+            (m for m in (per_modello.get(persona) or {}) if m != "(ignoto)"),
+            key=lambda m: per_modello[persona][m], reverse=True)
+        righe.append({
+            "person":   persona,
+            "cost":     vals.get("claude_code.cost.usage", 0.0),
+            "sessions": int(vals.get("claude_code.session.count", 0)),
+            "active":   vals.get("claude_code.active_time.total", 0.0),
+            "tokens":   tok,
+            "total_tokens": sum(tok.values()),
+            "models":   modelli,
+            "last":     ultimi.get(persona, 0.0),
+        })
+    righe.sort(key=lambda r: r["cost"], reverse=True)
+    return righe
+
+
 # --------------------------------------------------------------------------- #
 # Formattazione
 # --------------------------------------------------------------------------- #
@@ -577,6 +645,15 @@ class Handler(BaseHTTPRequestHandler):
                 "totale": totals(self.store, "all"),
                 "per_utente": totals(self.store, "user"),
                 "per_modello": totals(self.store, "model"),
+                "aggiornato": time.time(),
+            })
+            return
+
+        if path == "/api/team":
+            # Consumato dal pannello: righe gia' pronte, una per postazione.
+            self._json(200, {
+                "riservatezza": self.store.level,
+                "postazioni": team_rows(self.store),
                 "aggiornato": time.time(),
             })
             return

@@ -1069,6 +1069,69 @@ MONTH_COLUMNS = [
     ("output",   "Output",     80, "e", lambda r: r["output"], lambda r: Fmt.tokens(r["output"])),
 ]
 
+# Scheda Persone: una riga per postazione del team. La fonte non sono i
+# transcript locali (che contengono solo il proprio lavoro) ma l'archivio del
+# raccoglitore, alimentato dalla telemetria nativa di tutte le macchine.
+TEAM_COLUMNS = [
+    ("person",   "Postazione", 170, "w", lambda r: str(r["person"]).lower(),
+     lambda r: r["person"]),
+    ("cost",     "Se fosse API", 110, "e", lambda r: r["cost"],
+     lambda r: Fmt.cost(r["cost"])),
+    ("share",    "Quota del consumo", 165, "e", lambda r: r["cost"], lambda r: ""),
+    ("sessions", "Sess",       55, "e", lambda r: r["sessions"],
+     lambda r: r["sessions"]),
+    ("active",   "Attivo",     85, "e", lambda r: r["active"],
+     lambda r: Fmt.dur(r["active"])),
+    ("tok",      "Token",      85, "e", lambda r: r["total_tokens"],
+     lambda r: Fmt.tokens(r["total_tokens"])),
+    ("cr",       "Cache R",    85, "e", lambda r: r["tokens"]["cache_read"],
+     lambda r: Fmt.tokens(r["tokens"]["cache_read"])),
+    ("models",   "Modelli",   150, "w", lambda r: len(r["models"]),
+     lambda r: ", ".join(m.replace("claude-", "") for m in r["models"]) or "—"),
+    ("last",     "Ultima",     80, "e", lambda r: r["last"],
+     lambda r: Fmt.ago(r["last"])),
+]
+
+
+def team_db_candidates(config: dict) -> list[str]:
+    """Dove cercare l'archivio del raccoglitore, in ordine di precedenza."""
+    fuori = os.environ.get("CM_TEAM_DB")
+    scelto = ((config.get("team") or {}).get("db")) if config else None
+    return [p for p in (fuori, scelto,
+                        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "cm-team.db"),
+                        "cm-team.db") if p]
+
+
+def load_team_rows(config: dict, since: float | None = None):
+    """Righe per postazione dall'archivio del raccoglitore.
+
+    Restituisce (righe, livello_riservatezza, nota). La nota spiega perche' non
+    c'e' nulla, quando non c'e' nulla: senza, una scheda vuota sembra un guasto.
+    """
+    try:
+        import cm_collector
+    except ImportError:
+        return [], None, "cm_collector.py non trovato accanto al pannello"
+
+    for path in team_db_candidates(config):
+        if not os.path.isfile(path):
+            continue
+        try:
+            store = cm_collector.Store(path)          # sola lettura
+            righe = cm_collector.team_rows(store, since)
+            store.con.close()
+        except Exception as exc:                      # archivio illeggibile
+            return [], None, f"archivio non leggibile: {exc}"
+        if not righe:
+            return [], store.level, ("archivio presente ma ancora vuoto — "
+                                     "il raccoglitore non ha ricevuto dati")
+        return righe, store.level, ""
+
+    return [], None, ("nessun archivio di team: avvia il raccoglitore con "
+                      "python cm_collector.py")
+
+
 # Spiegazioni al passaggio del mouse sull'intestazione.
 def build_help(pricing: dict, totals: dict) -> dict:
     api = cm.cost_columns(pricing)[1] is None
@@ -1813,6 +1876,9 @@ class App:
         self.scanning = False
         self.sessions: list[dict] = []
         self.filtered: list[dict] = []
+        # Scheda Persone: fonte separata dai transcript, popolata dal raccoglitore
+        self.team_rows: list[dict] = []
+        self.team_hint = ""
         self.live_stop: threading.Event | None = None
         self.live_gen = 0
         self.period_spec = None
@@ -1983,7 +2049,8 @@ class App:
         # ---- selettore + tabelle
         bar = tk.Frame(root, bg=t["page"])
         bar.pack(fill="x", padx=20, pady=(10, 8))
-        self.segmented = Segmented(bar, t, ["Progetti", "Sessioni", "Mesi"], self._on_tab)
+        self.segmented = Segmented(bar, t, ["Progetti", "Sessioni", "Mesi", "Persone"],
+                                   self._on_tab)
         self.segmented.pack(side="left")
         self.l_hint = tk.Label(bar, text="doppio click su una sessione per il dettaglio",
                                bg=t["page"], fg=t["muted"], font=t.f_small)
@@ -1999,9 +2066,13 @@ class App:
                                       share_key=lambda r: r["cost"])
         self.months_tbl = DataTable(holder, t, MONTH_COLUMNS,
                                     share_key=lambda r: r["hyp"])
+        self.team_tbl = DataTable(holder, t, TEAM_COLUMNS,
+                                  share_key=lambda r: r["cost"])
         self.holder = holder
         self.projects.pack(fill="both", expand=True)
         self.current_table = self.projects
+        self._tables = (self.projects, self.sessions_tbl,
+                        self.months_tbl, self.team_tbl)
 
         # ---- barra di stato
         status = tk.Frame(root, bg=t["page"])
@@ -2013,12 +2084,17 @@ class App:
                  fg=t["muted"], font=t.f_small, anchor="e").pack(side="right")
 
     def _on_tab(self, index):
-        for table in (self.projects, self.sessions_tbl, self.months_tbl):
+        for table in self._tables:
             table.pack_forget()
-        self.current_table = (self.projects, self.sessions_tbl, self.months_tbl)[index]
+        self.current_table = self._tables[index]
         self.current_table.pack(fill="both", expand=True)
-        self.l_hint.config(text="doppio click su una sessione per il dettaglio"
-                           if index == 1 else getattr(self, "legend", ""))
+        if index == 1:
+            hint = "doppio click su una sessione per il dettaglio"
+        elif index == 3:
+            hint = self.team_hint or "dalla telemetria delle macchine del team"
+        else:
+            hint = getattr(self, "legend", "")
+        self.l_hint.config(text=hint)
 
     def _set_progress(self, frac):
         """Barra sottile visibile solo durante la scansione: a riposo sparisce."""
@@ -2053,6 +2129,12 @@ class App:
             self.q.put(("sessions", gen, sessions))
         except BaseException:
             self.q.put(("error", gen, traceback.format_exc()))
+        # L'archivio del team e' una fonte separata dai transcript: se manca o e'
+        # illeggibile la scheda lo dice, ma la scansione locale non ne risente.
+        try:
+            self.q.put(("team", gen, load_team_rows(self.pricing)))
+        except BaseException:
+            self.q.put(("team", gen, ([], None, "lettura fallita")))
 
     def _reload_config(self) -> None:
         """Rilegge config.json a ogni Aggiorna: prezzi, abbonamento e default
@@ -2175,6 +2257,8 @@ class App:
                         self.open_detail(match)
                     else:
                         self.l_status.config(text=f"sessione '{needle}' non trovata")
+            elif kind == "team" and gen == self.gen:
+                self._render_team(*payload)
             elif kind == "error" and gen == self.gen:
                 self.scanning = False
                 self.btn_refresh.set_text("Aggiorna")
@@ -2336,7 +2420,7 @@ class App:
         })
 
         help_texts = build_help(self.pricing, {"real": tot_real})
-        for table in (self.projects, self.sessions_tbl, self.months_tbl):
+        for table in self._tables:
             table.help = help_texts
 
         months = aggregate_by_month(rows, self.pricing)
@@ -2375,6 +2459,37 @@ class App:
         if needle:
             scope += f" · {needle}"
         self.l_scope.config(text=scope)
+
+    def _render_team(self, righe, livello, nota):
+        """Scheda Persone: consumo per postazione, dalla telemetria del team."""
+        self.team_rows = righe
+        etichetta = {
+            "aggregato":  "aggregato · nessun identificativo di persona",
+            "pseudonimo": "pseudonimo · codici a chiave, non indirizzi",
+            "nominativo": "nominativo · indirizzi in chiaro",
+        }.get(livello or "", "")
+        self.team_hint = nota or (f"riservatezza: {etichetta}" if etichetta else "")
+        if self.segmented.index == 3:
+            self.l_hint.config(text=self.team_hint)
+
+        if not righe:
+            self.team_tbl.set_rows([])
+            self.team_tbl.set_placeholder(nota or "nessun dato di team")
+            return
+
+        # La colonna "Postazione" cambia intestazione col livello: chi guarda
+        # deve capire senza chiedere se sta vedendo persone o codici.
+        self.team_tbl.set_heading(
+            "person", {"aggregato": "Insieme", "pseudonimo": "Postazione",
+                       "nominativo": "Persona"}.get(livello or "", "Postazione"))
+        self.team_tbl.set_rows(righe, {
+            "person":   f"{len(righe)} postazioni",
+            "cost":     Fmt.cost(sum(r["cost"] for r in righe)),
+            "sessions": str(sum(r["sessions"] for r in righe)),
+            "active":   Fmt.dur(sum(r["active"] for r in righe)),
+            "tok":      Fmt.tokens(sum(r["total_tokens"] for r in righe)),
+            "cr":       Fmt.tokens(sum(r["tokens"]["cache_read"] for r in righe)),
+        })
 
     # -- azioni ---------------------------------------------------------------- #
 
