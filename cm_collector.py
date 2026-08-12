@@ -732,6 +732,41 @@ def righe_da_sessioni(store: Store, since: float | None = None) -> dict[str, dic
     return fuori
 
 
+def projects_of(store: Store, persona: str,
+                since: float | None = None) -> list[dict]:
+    """Progetti su cui ha lavorato una postazione, dal piu' costoso.
+
+    E' la vista che serve al ribaltamento sulle commesse. Viene solo dai
+    transcript: la telemetria non sa su cosa si stia lavorando, quindi per una
+    postazione senza agente qui non c'e' niente da mostrare — e va detto,
+    invece di far sembrare che non abbia lavorato.
+    """
+    dove = "WHERE COALESCE(user_key,'(non identificato)') = ?"
+    args: list = [persona]
+    if since:
+        dove += " AND ended >= ?"
+        args.append(since)
+    righe = []
+    for r in store.query(
+        "SELECT COALESCE(project,'?') AS progetto, COUNT(*) AS n,"
+        " SUM(cost) AS costo, SUM(active) AS attivo, SUM(duration) AS durata,"
+        " SUM(assistant_msgs) AS msg, SUM(user_prompts) AS miei,"
+        " MAX(ended) AS ultimo"
+        f" FROM sessions {dove} GROUP BY progetto ORDER BY costo DESC", tuple(args)
+    ):
+        righe.append({
+            "project": r["progetto"],
+            "sessions": r["n"] or 0,
+            "cost": r["costo"] or 0.0,
+            "active": r["attivo"] or 0.0,
+            "duration": r["durata"] or 0.0,
+            "assistant_msgs": r["msg"] or 0,
+            "user_prompts": r["miei"] or 0,
+            "last": r["ultimo"] or 0.0,
+        })
+    return righe
+
+
 def observed_months(store: Store, since: float | None = None) -> tuple[int, float, float]:
     """Mesi di calendario toccati dai dati, e gli estremi della finestra.
 

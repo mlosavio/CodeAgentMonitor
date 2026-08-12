@@ -227,6 +227,31 @@ try:
     verifica("il cruscotto non mostra indirizzi",
              "azienda.it" in pagina, False)
 
+    print("\nDrill-down: i progetti di una postazione")
+    print("-" * 72)
+    prog_anna = cc.projects_of(store, anna["person"])
+    verifica("anna: tre progetti", len(prog_anna), 3)
+    verifica("ordinati dal piu' costoso",
+             [p["project"] for p in prog_anna],
+             ["Commessa Alfa", "Commessa Beta", "Interno"])
+    # Il drill-down deve quadrare con la riga da cui si scende, o le due viste
+    # si contraddicono e non si sa a quale credere.
+    verifica("la somma dei progetti fa il totale della postazione",
+             sum(p["cost"] for p in prog_anna), anna["cost"])
+    verifica("anche le sessioni quadrano",
+             sum(p["sessions"] for p in prog_anna), anna["sessions"])
+
+    verifica("una postazione con la sola telemetria non ha progetti",
+             len(cc.projects_of(store, carla["person"])), 0)
+
+    # Lo stesso progetto lavorato da due persone resta separato per persona
+    prog_bruno = cc.projects_of(store, [r for r in righe.values()
+                                        if r["source"] == "transcript"
+                                        and r["person"] != anna["person"]][0]["person"])
+    verifica("bruno vede solo il proprio pezzo di Commessa Alfa",
+             [(p["project"], p["cost"]) for p in prog_bruno],
+             [("Commessa Alfa", 260.0)])
+
     print("\nSpesa e postazioni ferme")
     print("-" * 72)
     mesi = cc.observed_months(store)[0]

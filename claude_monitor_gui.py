@@ -1612,6 +1612,101 @@ class ChatView(tk.Frame):
         t.yview_moveto(0.0)   # si legge dall'inizio: è il percorso fatto
 
 
+PERSON_PROJECT_COLUMNS = [
+    ("project",  "Progetto",   210, "w", lambda r: (r["project"] or "").lower(),
+     lambda r: r["project"]),
+    ("cost",     "Se fosse API", 110, "e", lambda r: r["cost"],
+     lambda r: Fmt.cost(r["cost"])),
+    ("share",    "Quota del consumo", 170, "e", lambda r: r["cost"], lambda r: ""),
+    ("sessions", "Sess",        55, "e", lambda r: r["sessions"],
+     lambda r: r["sessions"]),
+    ("active",   "Attivo",      85, "e", lambda r: r["active"],
+     lambda r: Fmt.dur(r["active"])),
+    ("msgs",     "Messaggi",    95, "e", lambda r: r["assistant_msgs"],
+     lambda r: f"{r['user_prompts']}/{r['assistant_msgs']}"),
+    ("last",     "Ultima",      80, "e", lambda r: r["last"],
+     lambda r: Fmt.ago(r["last"])),
+]
+
+
+class PersonWindow(tk.Toplevel):
+    """Su cosa ha lavorato una postazione: la vista per il ribaltamento.
+
+    Legge dall'archivio del raccoglitore, non dai transcript locali: qui i
+    progetti possono essere di un'altra macchina.
+    """
+
+    def __init__(self, app, riga: dict, config: dict):
+        super().__init__(app.root, bg=app.t["page"])
+        self.app = app
+        self.t = app.t
+        self.title(f"{APP_TITLE} — {riga['person']}")
+        self.geometry("980x560")
+        set_titlebar(self, self.t.mode == "dark")
+
+        head = tk.Frame(self, bg=self.t["page"])
+        head.pack(fill="x", padx=18, pady=(16, 10))
+        tk.Label(head, text=riga["person"], bg=self.t["page"], fg=self.t["ink"],
+                 font=self.t.f_title, anchor="w").pack(fill="x")
+        fonte = ("dai transcript, storico completo" if riga.get("source") == "transcript"
+                 else "solo telemetria: manca tutto quello che precede l'accensione")
+        tk.Label(head, text=fonte, bg=self.t["page"], fg=self.t["ink2"],
+                 font=self.t.f_small, anchor="w").pack(fill="x", pady=(3, 0))
+
+        tiles = tk.Frame(self, bg=self.t["page"])
+        tiles.pack(fill="x", padx=18)
+        for etichetta, valore in (
+            ("Se fosse API", Fmt.cost(riga["cost"])),
+            ("Hai pagato", riga.get("paid_txt", "—")),
+            ("Resa", riga.get("ratio_txt", "—")),
+            ("Tempo attivo", Fmt.dur(riga["active"])),
+            ("Sessioni", str(riga["sessions"])),
+        ):
+            t_ = StatTile(tiles, self.t, etichetta, width=150)
+            t_.pack(side="left", padx=(0, 10))
+            t_.set(valore)
+
+        holder = tk.Frame(self, bg=self.t["page"])
+        holder.pack(fill="both", expand=True, padx=18, pady=(14, 0))
+        self.tbl = DataTable(holder, self.t, PERSON_PROJECT_COLUMNS,
+                             share_key=lambda r: r["cost"])
+        self.tbl.pack(fill="both", expand=True)
+
+        stato = tk.Label(self, text="", bg=self.t["page"], fg=self.t["muted"],
+                         font=self.t.f_small, anchor="w")
+        stato.pack(fill="x", padx=18, pady=(6, 12))
+
+        righe = []
+        try:
+            import cm_collector
+            for path in team_db_candidates(config):
+                if os.path.isfile(path):
+                    store = cm_collector.Store(path)
+                    righe = cm_collector.projects_of(store, riga["person"])
+                    store.con.close()
+                    break
+        except Exception as exc:
+            stato.config(text=f"archivio non leggibile: {exc}")
+
+        if not righe:
+            self.tbl.set_rows([])
+            self.tbl.set_placeholder(
+                "nessun progetto: la telemetria non sa su cosa si lavora, "
+                "serve cm_agent.py su quella macchina")
+            stato.config(text="i progetti vengono solo dai transcript")
+            return
+
+        self.tbl.set_rows(righe, {
+            "project":  f"{len(righe)} progetti",
+            "cost":     Fmt.cost(sum(r["cost"] for r in righe)),
+            "sessions": str(sum(r["sessions"] for r in righe)),
+            "active":   Fmt.dur(sum(r["active"] for r in righe)),
+            "msgs":     f"{sum(r['user_prompts'] for r in righe)}/"
+                        f"{sum(r['assistant_msgs'] for r in righe)}",
+        })
+        stato.config(text="i progetti vengono dai transcript spediti da cm_agent")
+
+
 class SettingsWindow(tk.Toplevel):
     """Configurazione con dei campi veri, non un file JSON da interpretare."""
 
@@ -2159,6 +2254,7 @@ class App:
         self.months_tbl = DataTable(holder, t, MONTH_COLUMNS,
                                     share_key=lambda r: r["hyp"])
         self.team_tbl = DataTable(holder, t, TEAM_COLUMNS,
+                                  on_activate=self.open_person,
                                   share_key=lambda r: r["cost"])
         self.holder = holder
         self.projects.pack(fill="both", expand=True)
@@ -2183,7 +2279,7 @@ class App:
         if index == 1:
             hint = "doppio click su una sessione per il dettaglio"
         elif index == 3:
-            hint = self.team_hint or "dalla telemetria delle macchine del team"
+            hint = self.team_hint or "doppio click su una postazione per i suoi progetti"
         else:
             hint = getattr(self, "legend", "")
         self.l_hint.config(text=hint)
@@ -2585,6 +2681,8 @@ class App:
             parti.append("solo telemetria: manca lo storico precedente")
         if etichetta:
             parti.append(f"riservatezza: {etichetta}")
+        if righe:
+            parti.insert(0, "doppio click per i progetti di una postazione")
         self.team_hint = nota or "  ·  ".join(parti)
         if self.segmented.index == 3:
             self.l_hint.config(text=self.team_hint)
@@ -2628,6 +2726,10 @@ class App:
         self.l_status.config(
             text=f"{len(self.filtered)} conversazioni di «{name}»  ·  "
                  f"doppio click per rileggerne una  ·  svuota il filtro per tornare a tutte")
+
+    def open_person(self, riga):
+        """Doppio click su una postazione: su cosa ha lavorato."""
+        PersonWindow(self, riga, self.pricing)
 
     def open_detail(self, session):
         DetailWindow(self, session)
