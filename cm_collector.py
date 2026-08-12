@@ -1182,15 +1182,33 @@ def print_service(host: str, port: int, db: str, privacy: str) -> None:
     print()
     if os.name == "nt":
         pyw = sys.executable.replace("python.exe", "pythonw.exe")
-        print("Windows — attivita' pianificata all'accesso (nessuna finestra):")
+        # La via senza privilegi viene per prima: schtasks fallisce con
+        # "Access is denied" per un utente non amministratore, ed e' il caso
+        # normale su una postazione aziendale.
+        print("Windows, senza privilegi — collegamento in Esecuzione automatica.")
+        print("Incolla in una finestra PowerShell (non serve amministratore):")
         print()
-        print(f'  schtasks /Create /TN "cm-collector" /SC ONLOGON /RL LIMITED \\')
-        print(f'      /TR "\'{pyw}\' {args}"')
+        print("  $s = (New-Object -ComObject WScript.Shell).CreateShortcut(")
+        print("      (Join-Path ([Environment]::GetFolderPath('Startup')) "
+              "'cm-collector.lnk'))")
+        print(f"  $s.TargetPath       = '{pyw}'")
+        print(f"  $s.Arguments        = '{args}'")
+        print(f"  $s.WorkingDirectory = '{qui}'")
+        print("  $s.Save()")
         print()
-        print("  avvio immediato senza aspettare il prossimo accesso:")
-        print('      schtasks /Run /TN "cm-collector"')
-        print("  per rimuoverla:")
-        print('      schtasks /Delete /TN "cm-collector" /F')
+        print("  per toglierlo, cancella il collegamento:  explorer shell:startup")
+        print()
+        print("Windows, da amministratore — attivita' pianificata.")
+        print("Stessa cosa ma per tutta la macchina, in PowerShell elevato:")
+        print()
+        print(f"  $a = New-ScheduledTaskAction -Execute '{pyw}' `")
+        print(f"      -Argument '{args}' -WorkingDirectory '{qui}'")
+        print("  $t = New-ScheduledTaskTrigger -AtLogOn")
+        print("  Register-ScheduledTask -TaskName 'cm-collector' -Action $a "
+              "-Trigger $t -Force")
+        print()
+        print("  per rimuoverla:  Unregister-ScheduledTask -TaskName "
+              "'cm-collector' -Confirm:$false")
     else:
         print("Linux — unita' utente systemd in ~/.config/systemd/user/cm-collector.service:")
         print()
