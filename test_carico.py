@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import socket
 import sys
 import tempfile
 import threading
@@ -53,22 +52,17 @@ def verifica(nome: str, ottenuto, atteso) -> None:
           + ("" if buono else f"   atteso {atteso!r}"))
 
 
-def porta_libera() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 cartella = tempfile.mkdtemp(prefix="cm-carico-")
-porta = porta_libera()
-base = f"http://127.0.0.1:{porta}"
 store = cc.Store(f"{cartella}/carico.db",
                  cc.make_privacy("pseudonimo", f"{cartella}/k.key"), "pseudonimo")
 cc.Handler.store = store
 cc.Handler.verbose = False
 cc.Handler.token = None
-httpd = ThreadingHTTPServer(("127.0.0.1", porta), cc.Handler)
+httpd = ThreadingHTTPServer(("127.0.0.1", 0), cc.Handler)
 httpd.daemon_threads = True
+# La porta la sceglie il server: fra lo sceglierla e l'usarla non c'e'
+# nessuna finestra in cui un altro processo possa infilarcisi.
+base = f"http://127.0.0.1:{httpd.server_address[1]}"
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 time.sleep(0.3)
 

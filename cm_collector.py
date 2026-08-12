@@ -943,13 +943,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0].rstrip("/")
-        if not self._autorizzato():
-            self._json(401, {"error": "token mancante o errato"})
-            return
+        # Il corpo va letto SEMPRE, anche quando la risposta e' un rifiuto:
+        # chiudere la connessione lasciando dati non letti fa mandare al sistema
+        # un reset invece di una chiusura pulita, e il client vede un errore di
+        # rete al posto del 401. Su Windows succede a intermittenza, che e' il
+        # modo peggiore in cui un errore puo' presentarsi.
         try:
             raw = read_body(self)
         except Exception as exc:
             self._json(400, {"error": f"corpo illeggibile: {exc}"})
+            return
+
+        if not self._autorizzato():
+            self._json(401, {"error": "token mancante o errato"})
             return
 
         if path == "/v1/sessions":

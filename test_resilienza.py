@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import socket
 import sys
 import tempfile
 import threading
@@ -48,12 +47,6 @@ def verifica(nome: str, ottenuto, atteso) -> None:
           + ("" if buono else f"   atteso {atteso!r}"))
 
 
-def porta_libera() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 ORA = time.time()
 
 
@@ -74,7 +67,10 @@ SESSIONI = [finta_sessione("s-1", ORA - 100, 10.0),
             finta_sessione("s-2", ORA - 50, 20.0)]
 
 
-def avvia_raccoglitore(store: cc.Store, porta: int) -> ThreadingHTTPServer:
+def avvia_raccoglitore(store: cc.Store, porta: int = 0) -> ThreadingHTTPServer:
+    """La prima volta sceglie la porta, poi si riusa quella: il raccoglitore
+    deve tornare allo stesso indirizzo, altrimenti non si sta provando un
+    riavvio ma un trasloco."""
     cc.Handler.store = store
     cc.Handler.verbose = False
     cc.Handler.token = None
@@ -86,7 +82,6 @@ def avvia_raccoglitore(store: cc.Store, porta: int) -> ThreadingHTTPServer:
 
 
 cartella = tempfile.mkdtemp(prefix="cm-resil-")
-porta = porta_libera()
 stato_path = os.path.join(cartella, "agent.json")
 store = cc.Store(os.path.join(cartella, "r.db"),
                  cc.make_privacy("pseudonimo", os.path.join(cartella, "k.key")),
@@ -99,8 +94,17 @@ cm_originale = cm.collect
 cm.collect = lambda *a, **k: [dict(s) for s in sessioni_correnti]
 cm.allocate_real_cost = lambda *a, **k: None
 
+# Si avvia una volta sola per farsi assegnare una porta dal sistema, poi la si
+# spegne subito: la prima prova ha bisogno che a quell'indirizzo non risponda
+# nessuno. Farsela dare cosi', invece di aprire e chiudere una socket a mano,
+# fa combaciare le stesse opzioni di riuso che il server usera' al riavvio.
+_avvio = avvia_raccoglitore(store)
+PORTA = _avvio.server_address[1]
+_avvio.shutdown()
+_avvio.server_close()
+
 args = types.SimpleNamespace(
-    endpoint=f"http://127.0.0.1:{porta}", token=None, base=".", config=None,
+    endpoint=f"http://127.0.0.1:{PORTA}", token=None, base=".", config=None,
     idle_gap=300.0, dry_run=False, show_payload=False, once=True, reset=False)
 config = {"subscription": {"currency": "EUR"}, "billing": {"mode": "subscription"}}
 
@@ -122,7 +126,7 @@ try:
 
     print("\nRaccoglitore ACCESO")
     print("-" * 72)
-    httpd = avvia_raccoglitore(store, porta)
+    httpd = avvia_raccoglitore(store, PORTA)
     ok = ca.un_giro(args, config, stato, stato_path)
     verifica("ora l'invio riesce", ok, True)
     verifica("niente e' andato perso: due sessioni in archivio",
@@ -158,7 +162,7 @@ try:
 
     print("\nIl raccoglitore torna")
     print("-" * 72)
-    httpd = avvia_raccoglitore(store, porta)
+    httpd = avvia_raccoglitore(store, PORTA)
     ok = ca.un_giro(args, config, stato, stato_path)
     verifica("recupera quello che era rimasto indietro", ok, True)
     verifica("tre sessioni in archivio",
