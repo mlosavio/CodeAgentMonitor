@@ -427,7 +427,19 @@ python cm_collector.py --setup-service
 stampa il comando giusto per il sistema in uso — attività pianificata su Windows, unità systemd
 altrove. Per un gruppo di lavoro il raccoglitore sta su **una** macchina in sede, installato
 come servizio di sistema e con `--host` aperto oltre `127.0.0.1`; le postazioni gli mandano i
-dati e non ricevono connessioni da nessuno.
+dati e non ricevono connessioni da nessuno. Appena apri alla rete serve `--token`, altrimenti
+chiunque può scrivere in archivio: l'avvio te lo dice.
+
+### Quanto grande può essere il gruppo
+
+`python test_carico.py 50 20` simula cinquanta postazioni che spediscono insieme. Misurato su un
+portatile Windows: **576 richieste al secondo**, mille richieste servite in 1,7 secondi, caso
+peggiore 1,5 s, nessuna riga persa né contata due volte.
+
+Per confronto, un agente spedisce ogni 15 minuti: cinquanta postazioni fanno **una richiesta
+ogni 18 secondi**. Il margine è di circa quattro ordini di grandezza, quindi il raccoglitore su
+una macchina qualunque basta ampiamente — il dimensionamento del server non è un problema di
+questo progetto.
 
 ---
 
