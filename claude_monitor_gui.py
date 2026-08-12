@@ -1651,7 +1651,7 @@ class SettingsWindow(tk.Toplevel):
         self.body = tk.Frame(self, bg=self.t["page"])
         self.body.pack(fill="both", expand=True, padx=18, pady=(10, 0))
         self.seg = Segmented(nav, self.t,
-                             ["Abbonamento", "Aspetto", "Statusline", "Listino"],
+                             ["Abbonamento", "Team", "Aspetto", "Statusline", "Listino"],
                              self._show_page)
 
         # ---- Abbonamento
@@ -1679,6 +1679,51 @@ class SettingsWindow(tk.Toplevel):
                                ", ".join(bil.get("api_projects") or []), width=34,
                                hint="Separati da virgola: progetti lanciati con "
                                     "ANTHROPIC_API_KEY, fatturati a chiamata anche se hai l'abbonamento.")
+
+        # ---- Team
+        tm = self.raw.get("team") or {}
+        p = self._page("Team")
+        tk.Label(p, text="Consumo di più macchine, dalla telemetria di Claude Code "
+                         "raccolta da cm_collector.py.",
+                 bg=self.t["surface"], fg=self.t["muted"], font=self.t.f_small,
+                 anchor="w", justify="left").pack(fill="x", pady=(0, 10))
+        self.f_seats = Field(p, self.t, "Postazioni pagate", tm.get("seats", 0), width=8,
+                             hint="Quante ne paghi in tutto, non quante ne vedi usare. "
+                                  "Chi non usa lo strumento non manda telemetria e non "
+                                  "compare: le postazioni ferme si scoprono solo così.")
+        self.f_fee = Field(p, self.t, "Quota mensile per postazione",
+                           tm.get("fee_per_seat", 0.0), width=12,
+                           hint="0 spegne le colonne di spesa e lascia solo il consumo.")
+        self.f_tcur = ChoiceRow(p, self.t, "Valuta della quota",
+                                [("EUR", "EUR"), ("USD", "USD"), ("GBP", "GBP")],
+                                (tm.get("currency") or "EUR").upper())
+        self.f_tdb = Field(p, self.t, "Archivio del raccoglitore", tm.get("db") or "",
+                           width=34,
+                           hint="Vuoto = cercalo accanto al pannello (cm-team.db).")
+
+        # Il livello di riservatezza non si imposta qui: lo decide il raccoglitore
+        # quando scrive, perché la telemetria manda l'indirizzo comunque. Qui si
+        # può solo mostrare quello in vigore, letto dall'archivio stesso.
+        livello = "nessun archivio trovato"
+        try:
+            import cm_collector as _cc
+            for _p in team_db_candidates(self.raw):
+                if os.path.isfile(_p):
+                    _s = _cc.Store(_p)
+                    livello = _s.level
+                    _s.con.close()
+                    break
+        except Exception:
+            livello = "non leggibile"
+        tk.Label(p, text=f"Riservatezza in vigore: {livello}",
+                 bg=self.t["surface"], fg=self.t["ink2"], font=self.t.f_body,
+                 anchor="w").pack(fill="x", pady=(14, 2))
+        tk.Label(p, text="Si imposta sul raccoglitore, non qui: la telemetria manda "
+                         "l'indirizzo di posta comunque, quindi il livello va imposto "
+                         "dove il dato viene scritto.\n"
+                         "    python cm_collector.py --privacy aggregato|pseudonimo|nominativo",
+                 bg=self.t["surface"], fg=self.t["muted"], font=self.t.f_small,
+                 anchor="w", justify="left").pack(fill="x")
 
         # ---- Aspetto
         p = self._page("Aspetto")
@@ -1827,6 +1872,10 @@ class SettingsWindow(tk.Toplevel):
         ok &= good
         crit, good = self._num(self.f_crit, float, minimum=0)
         ok &= good
+        seats, good = self._num(self.f_seats, int, minimum=0)
+        ok &= good
+        fee, good = self._num(self.f_fee, float, minimum=0)
+        ok &= good
         since = self.f_since.get()
         if since and not re_date(since):
             self.f_since.error("AAAA-MM-GG")
@@ -1846,6 +1895,10 @@ class SettingsWindow(tk.Toplevel):
             "currency": self.f_cur.get(), "note": self.f_note.get(), "since": since,
         })
         raw.setdefault("fx", {})["usd_per_unit"] = fx
+        raw.setdefault("team", {}).update({
+            "seats": seats, "fee_per_seat": fee,
+            "currency": self.f_tcur.get(), "db": self.f_tdb.get().strip() or None,
+        })
         raw.setdefault("defaults", {}).update({
             "theme": self.f_theme.get(), "locale": self.f_locale.get(),
             "auto_refresh_minutes": auto, "idle_gap": idle,

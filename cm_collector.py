@@ -874,6 +874,50 @@ def setup_env(endpoint: str) -> dict:
     }
 
 
+def print_service(host: str, port: int, db: str, privacy: str) -> None:
+    """Come far sopravvivere il raccoglitore alla sessione che l'ha avviato.
+
+    Avviato a mano da un terminale, il raccoglitore muore con quel terminale —
+    e i dati persi in quell'intervallo non si recuperano, perche' l'esportatore
+    ritenta per poco e poi lascia perdere. Va installato come servizio.
+    """
+    qui = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(qui, os.path.basename(__file__))
+    args = (f'"{script}" --db "{db}" --port {port} --host {host} '
+            f'--privacy {privacy}')
+
+    print("Far partire il raccoglitore da solo, e tenerlo su")
+    print("=" * 64)
+    print()
+    if os.name == "nt":
+        pyw = sys.executable.replace("python.exe", "pythonw.exe")
+        print("Windows — attivita' pianificata all'accesso (nessuna finestra):")
+        print()
+        print(f'  schtasks /Create /TN "cm-collector" /SC ONLOGON /RL LIMITED \\')
+        print(f'      /TR "\'{pyw}\' {args}"')
+        print()
+        print("  avvio immediato senza aspettare il prossimo accesso:")
+        print('      schtasks /Run /TN "cm-collector"')
+        print("  per rimuoverla:")
+        print('      schtasks /Delete /TN "cm-collector" /F')
+    else:
+        print("Linux — unita' utente systemd in ~/.config/systemd/user/cm-collector.service:")
+        print()
+        print("  [Unit]")
+        print("  Description=Raccoglitore telemetria Claude Code")
+        print("  [Service]")
+        print(f"  ExecStart={sys.executable} {args}")
+        print("  Restart=always")
+        print("  [Install]")
+        print("  WantedBy=default.target")
+        print()
+        print("  systemctl --user enable --now cm-collector")
+    print()
+    print("Per il team il raccoglitore sta su una macchina sola, in sede, e le")
+    print("postazioni gli mandano i dati: li' va installato come servizio di")
+    print("sistema, non dell'utente, e --host va aperto oltre 127.0.0.1.")
+
+
 def print_setup(endpoint: str) -> None:
     env = setup_env(endpoint)
     print("Configurazione da applicare a Claude Code")
@@ -987,6 +1031,8 @@ def main(argv=None) -> int:
     ap.add_argument("--since", help="finestra temporale, es. 7d, 24h, 30m")
     ap.add_argument("--setup", action="store_true",
                     help="stampa la configurazione da applicare a Claude Code")
+    ap.add_argument("--setup-service", action="store_true",
+                    help="stampa come installare il raccoglitore come servizio")
     ap.add_argument("--privacy", default="pseudonimo", choices=PRIVACY_LEVELS,
                     help="livello di dettaglio sulle persone (default: pseudonimo)")
     ap.add_argument("--key", default="cm-pseudonimi.key",
@@ -997,6 +1043,10 @@ def main(argv=None) -> int:
 
     if args.setup:
         print_setup(f"http://{args.host}:{args.port}")
+        return 0
+
+    if args.setup_service:
+        print_service(args.host, args.port, args.db, args.privacy)
         return 0
 
     privacy = make_privacy(args.privacy, args.key)
