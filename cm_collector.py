@@ -411,13 +411,21 @@ class Store:
         self.duplicates += dup
         return (new, dup)
 
-    def add_sessions(self, machine: str, sessioni: list[dict]) -> tuple[int, int]:
+    def add_sessions(self, machine: str, sessioni: list[dict],
+                     user: str | None = None,
+                     attrs: dict | None = None) -> tuple[int, int]:
         """Registra o aggiorna le sessioni spedite da una macchina.
 
         Una sessione cresce nel tempo: lo stesso identificativo torna piu' volte
         con numeri piu' alti. Si sovrascrive solo se l'ultimo evento e' piu'
         recente, cosi' un invio arrivato fuori ordine non riporta indietro il
         conto — e un rinvio identico non cambia niente.
+
+        L'identita' si prende dalla busta, e solo in mancanza da ogni singola
+        sessione. Il contrario era fragile: un agente che la mette solo nella
+        busta — che e' la lettura naturale del formato — faceva finire tutto
+        sotto "non identificato", e con piu' macchine sotto la stessa voce, con
+        i costi di tutti sommati insieme.
         """
         now = time.time()
         scritte = ignorate = 0
@@ -427,7 +435,8 @@ class Store:
                 if not sid:
                     continue
                 p = self.privacy({
-                    "user_key": s.get("user"), "attrs": dict(s.get("attrs") or {}),
+                    "user_key": s.get("user") or user,
+                    "attrs": dict(s.get("attrs") or attrs or {}),
                 })
                 riga = (
                     machine, sid, p["user_key"], s.get("project"),
@@ -895,7 +904,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload = json.loads(raw.decode("utf-8") or "{}")
                 macchina = str(payload.get("machine") or "").strip() or "?"
                 scritte, ignorate = self.store.add_sessions(
-                    macchina, payload.get("sessions") or [])
+                    macchina, payload.get("sessions") or [],
+                    payload.get("user"), payload.get("attrs"))
             except Exception as exc:
                 sys.stderr.write(f"[cm-collector] sessioni non scritte: {exc}\n")
                 self._json(400, {"error": str(exc)})

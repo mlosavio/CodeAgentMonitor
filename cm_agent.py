@@ -246,17 +246,13 @@ def un_giro(args, config: dict, stato: dict, path_stato: str) -> bool:
             "organization.id": ident["organization"],
         }.items() if v},
         "currency": cm.display_currency(config),
+        # L'identita' sta nella busta una volta sola, non ripetuta in ogni
+        # sessione: il raccoglitore la prende da qui.
         "sessions": [payload_sessione(s) for s in nuove],
     }
-    for s in payload["sessions"]:
-        s["currency"] = payload["currency"]
-        s["user"] = payload["user"]
-        s["attrs"] = payload["attrs"]
 
     # La verifica del confine gira a ogni invio, non solo nelle prove.
-    sospetti = controlla_confine({"sessions": [
-        {k: v for k, v in s.items() if k not in ("currency", "user", "attrs")}
-        for s in payload["sessions"]]})
+    sospetti = controlla_confine(payload)
     if sospetti:
         print(f"INVIO ANNULLATO: campi non ammessi nel payload: {sospetti}")
         return False
