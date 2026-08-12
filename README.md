@@ -645,6 +645,13 @@ Se tocchi il raccoglitore, `python test_collector.py` deve restare verde: copre 
 conteggio si sbaglia — invii ritentati, metriche cumulative, totali per gruppo — e il confine di
 riservatezza.
 
+`python test_scenario.py` fa una cosa diversa: avvia un raccoglitore vero su una porta libera e
+ci parla **via rete**, simulando tre postazioni con storici diversi più cinque pagate e mai
+usate. Serve a prendere gli errori che stanno *fra* i pezzi invece che dentro un pezzo — il
+primo che ha trovato era il raccoglitore che leggeva l'identità da ogni sessione invece che
+dalla busta, con il risultato che i costi di persone diverse finivano sommati in una riga sola.
+Usa un archivio temporaneo e lo cancella: non tocca il tuo.
+
 ---
 
 ## Licenza
