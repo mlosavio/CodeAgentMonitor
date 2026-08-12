@@ -30,6 +30,12 @@ from http.server import ThreadingHTTPServer
 
 import cm_collector as cc
 
+try:  # console Windows: senza questo l'output rediretto muore sugli accenti
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # pragma: no cover
+    pass
+
+
 esiti: list[tuple[bool, str]] = []
 TOKEN = "prova-token-condiviso"
 

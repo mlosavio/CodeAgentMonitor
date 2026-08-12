@@ -20,6 +20,11 @@ import tempfile
 
 import cm_collector as cc
 
+try:  # console Windows: senza questo l'output rediretto muore sugli accenti
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # pragma: no cover
+    pass
+
 esiti: list[tuple[bool, str]] = []
 
 
@@ -310,6 +315,8 @@ print("\nConfine di cio' che esce dalla macchina (cm_agent)")
 print("-" * 72)
 
 import cm_agent as ca
+
+
 
 # Una sessione con dentro tutto quello che il parser sa produrre, con valori
 # riconoscibili al posto dei campi che non devono uscire. Se uno di questi

@@ -430,6 +430,23 @@ come servizio di sistema e con `--host` aperto oltre `127.0.0.1`; le postazioni 
 dati e non ricevono connessioni da nessuno. Appena apri alla rete serve `--token`, altrimenti
 chiunque può scrivere in archivio: l'avvio te lo dice.
 
+### Il riepilogo da portare in riunione
+
+```bat
+python cm_collector.py --relazione                :: a schermo
+python cm_collector.py --relazione consumo.md     :: su file
+python cm_collector.py --relazione consumo.md --since 90d
+```
+
+Markdown con le cifre in breve, la tabella per postazione e quella per progetto. Le avvertenze
+non stanno in fondo in piccolo ma **accanto ai numeri che limitano**: che *pagato* viene da quello
+che dichiari e non da una fattura letta, che il valore a listino non viene addebitato, che le
+postazioni ferme si deducono e non si osservano, e che una postazione senza agente ha numeri
+parziali per difetto invece che bassi.
+
+In coda c'è cosa **non** viene raccolto, e il livello di riservatezza è scritto in testa: chi
+riceve il documento non deve chiedere a te che cosa ha in mano.
+
 ### Sta funzionando?
 
 ```bat

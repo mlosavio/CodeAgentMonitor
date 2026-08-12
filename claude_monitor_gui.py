@@ -2204,6 +2204,8 @@ class App:
         self.menu_export.add_command(label="Conversazioni in Markdown…",
                                      command=self.export_conversations)
         self.menu_export.add_command(label="Dati in JSON…", command=self.export_json)
+        self.menu_export.add_command(label="Riepilogo del team in Markdown…",
+                                     command=self.export_relazione)
         self.search = SearchBox(right, t, "filtra progetto", self._on_search, width=140)
         self.search.pack(side="right", padx=(6, 0))
         self.dd_period = Dropdown(right, t, PERIODS, self._on_period, width=104)
@@ -2807,6 +2809,42 @@ class App:
             self.q.put(("export", self.gen, ("done", result, dove, None)))
         except BaseException:
             self.q.put(("export", self.gen, ("error", None, dove, traceback.format_exc())))
+
+    def export_relazione(self):
+        """Il riepilogo di team, quello da allegare a una mail o stampare."""
+        try:
+            import cm_collector
+        except ImportError:
+            messagebox.showerror(APP_TITLE, "cm_collector.py non trovato "
+                                            "accanto al pannello.")
+            return
+        percorso = next((p for p in team_db_candidates(self.pricing)
+                         if os.path.isfile(p)), None)
+        if not percorso:
+            messagebox.showinfo(APP_TITLE,
+                                "Nessun archivio di team: avvia prima il "
+                                "raccoglitore con  python cm_collector.py")
+            return
+        dove = filedialog.asksaveasfilename(
+            title="Salva il riepilogo del team", defaultextension=".md",
+            initialfile="consumo-team.md",
+            filetypes=[("Markdown", "*.md"), ("Tutti i file", "*.*")])
+        if not dove:
+            return
+        try:
+            store = cm_collector.Store(percorso)
+            testo = cm_collector.relazione_markdown(
+                store, self.pricing.get("team") or {},
+                cm.fx_usd_per_unit(self.pricing),
+                cm.parse_since(self.period_spec) if self.period_spec else None)
+            store.con.close()
+            with open(dove, "w", encoding="utf-8") as fh:
+                fh.write(testo)
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE,
+                                 f"Non sono riuscito a scrivere:\n{exc}")
+            return
+        self.l_status.config(text=f"riepilogo scritto in {dove}")
 
     def export_json(self):
         path = filedialog.asksaveasfilename(

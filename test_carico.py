@@ -33,6 +33,12 @@ from http.server import ThreadingHTTPServer
 
 import cm_collector as cc
 
+try:  # console Windows: senza questo l'output rediretto muore sugli accenti
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # pragma: no cover
+    pass
+
+
 POSTAZIONI = int(sys.argv[1]) if len(sys.argv) > 1 else 20
 INVII = int(sys.argv[2]) if len(sys.argv) > 2 else 10
 SESSIONI_PER_INVIO = 5

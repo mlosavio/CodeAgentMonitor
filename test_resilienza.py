@@ -32,6 +32,12 @@ import claude_monitor as cm
 import cm_agent as ca
 import cm_collector as cc
 
+try:  # console Windows: senza questo l'output rediretto muore sugli accenti
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # pragma: no cover
+    pass
+
+
 esiti: list[tuple[bool, str]] = []
 
 
