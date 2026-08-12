@@ -949,8 +949,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/summary":
             self._json(200, {
-                "totale": totals(self.store, "all"),
-                "per_utente": totals(self.store, "user"),
+                "totale": totals_uniti(self.store, "all"),
+                "per_utente": totals_uniti(self.store, "user"),
                 "per_modello": totals(self.store, "model"),
                 "aggiornato": time.time(),
             })
@@ -1019,9 +1019,11 @@ TILE_METRICS = [
 
 
 def dashboard_html(store: Store) -> str:
-    tot = totals(store, "all").get("totale", {})
-    per_user = totals(store, "user")
-    per_model = totals(store, "model")
+    # Stessa unione del pannello e del riepilogo da terminale: le tre viste
+    # devono dire la stessa cifra, o non ne vale nessuna.
+    tot = totals_uniti(store, "all").get("totale", {})
+    per_user = totals_uniti(store, "user")
+    per_model = totals(store, "model")   # asse di sola telemetria
 
     if not tot:
         body = (
