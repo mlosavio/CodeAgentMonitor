@@ -1183,8 +1183,38 @@ def print_setup(endpoint: str) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def totals_uniti(store: Store, by: str = "all",
+                 since: float | None = None) -> dict:
+    """Come totals(), ma per postazione unisce le due fonti come fa il pannello.
+
+    Serve perche' il riepilogo da terminale e la scheda Persone dicano la stessa
+    cifra. Prima non era cosi': il terminale leggeva la sola telemetria e per la
+    stessa postazione mostrava 0,10 dollari dove il pannello ne mostrava 2.958.
+
+    Gli assi modello, tipo e sessione restano quelli della sola telemetria: sono
+    dimensioni che i transcript, nella forma in cui arrivano qui, non hanno.
+    """
+    if by not in ("user", "all"):
+        return totals(store, by, since)
+
+    fuori: dict[str, dict] = {}
+    for r in team_rows(store, since):
+        chiave = r["person"] if by == "user" else "totale"
+        slot = fuori.setdefault(chiave, {})
+        for metrica, valore in (
+            ("claude_code.cost.usage", r["cost"]),
+            ("claude_code.token.usage", r["total_tokens"]),
+            ("claude_code.active_time.total", r["active"]),
+            ("claude_code.session.count", r["sessions"]),
+        ):
+            slot[metrica] = slot.get(metrica, 0.0) + (valore or 0.0)
+        for metrica, valore in (r.get("extra") or {}).items():
+            slot[metrica] = slot.get(metrica, 0.0) + valore
+    return fuori
+
+
 def print_report(store: Store, by: str, since: float | None) -> None:
-    dati = totals(store, by, since)
+    dati = totals_uniti(store, by, since)
     if not dati:
         print("Nessun datapoint raccolto finora.")
         print()
@@ -1213,8 +1243,20 @@ def print_report(store: Store, by: str, since: float | None) -> None:
         print(riga)
     print()
     n = store.query("SELECT COUNT(*) AS n FROM points")[0]["n"]
-    print(f"{n} datapoint in archivio ({store.level}) — "
-          f"{os.path.abspath(store.path)}")
+    ns = store.query("SELECT COUNT(*) AS n FROM sessions")[0]["n"]
+    print(f"{n} datapoint di telemetria e {ns} sessioni in archivio "
+          f"({store.level}) — {os.path.abspath(store.path)}")
+    if by in ("user", "all"):
+        if ns:
+            print("Costo, token, tempo e sessioni vengono dai transcript, che "
+                  "coprono anche il passato;")
+            print("dalla telemetria solo cio' che i transcript non hanno. Le "
+                  "due fonti non si sommano.")
+        else:
+            print("Solo telemetria: senza cm_agent.py manca tutto quello che "
+                  "precede l'accensione.")
+    else:
+        print(f"Asse '{by}': dalla sola telemetria.")
 
 
 # --------------------------------------------------------------------------- #

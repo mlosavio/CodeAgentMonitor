@@ -171,6 +171,24 @@ verifica("un invio piu' vecchio viene ignorato", (scritte, ignorate), (0, 1))
 verifica("e il conto resta quello buono",
          {r["person"]: r for r in cc.team_rows(st5)}["a@x.it"]["cost"], 800.0)
 
+# Il riepilogo da terminale e la scheda Persone devono dire la stessa cifra.
+# Prima non era cosi': il terminale leggeva la sola telemetria e mostrava 0,10
+# dollari dove il pannello ne mostrava 2.958. Un pannello e un comando che si
+# contraddicono valgono meno di uno solo dei due.
+uniti = cc.totals_uniti(st5, "user")
+for r in cc.team_rows(st5):
+    verifica(f"terminale e pannello concordano sul costo ({r['person']})",
+             uniti[r["person"]]["claude_code.cost.usage"], r["cost"])
+    verifica(f"...e sulle sessioni ({r['person']})",
+             uniti[r["person"]]["claude_code.session.count"], float(r["sessions"]))
+verifica("il totale e' la somma delle postazioni",
+         cc.totals_uniti(st5, "all")["totale"]["claude_code.cost.usage"],
+         sum(r["cost"] for r in cc.team_rows(st5)))
+# Gli assi che i transcript non hanno restano quelli della sola telemetria,
+# senza fingere di essere altro.
+verifica("l'asse modello resta telemetria",
+         cc.totals_uniti(st5, "model") == cc.totals(st5, "model"), True)
+
 # --------------------------------------------------------------------------- #
 
 print("\nModello di costo del team")
