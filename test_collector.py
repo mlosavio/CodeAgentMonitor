@@ -110,6 +110,69 @@ verifica("modelli elencati", righe["a@x.it"]["models"], ["claude-opus-5"])
 
 # --------------------------------------------------------------------------- #
 
+print("\nUnione delle due fonti senza doppi conteggi")
+print("-" * 72)
+
+# Una postazione che ha sia i transcript sia la telemetria: la stessa sessione
+# esiste in entrambe le fonti. Sommarle la conterebbe due volte.
+st5 = store()
+st5.add_sessions("m-1", [{
+    "session_id": "s1", "user": "a@x.it", "project": "Alfa",
+    "start": 1000.0, "end": 2000.0, "duration": 1000.0, "active": 900.0,
+    "cost": 500.0, "real_cost": 30.0, "billing": "subscription",
+    "tokens": {"input": 100, "output": 200, "cache_read": 5000,
+               "cache_w5m": 300, "cache_w1h": 100},
+    "per_month": {"2026-08": {"claude-opus-5": {"cost": 500.0}}},
+}])
+# la telemetria vede solo una parte di quella stessa attivita'
+st5.add([punto("claude_code.cost.usage", 12.0, 1, 1900.0, "a@x.it", "s1")])
+st5.add([punto("claude_code.session.count", 1, 1, 1900.0, "a@x.it", "s1")])
+st5.add([punto("claude_code.lines_of_code.count", 420, 1, 1900.0, "a@x.it", "s1")])
+
+righe5 = {r["person"]: r for r in cc.team_rows(st5)}
+r5 = righe5["a@x.it"]
+verifica("con entrambe le fonti vince il transcript", r5["source"], "transcript")
+verifica("il costo NON e' la somma delle due fonti", r5["cost"], 500.0)
+verifica("le sessioni non si sommano", r5["sessions"], 1)
+verifica("il tempo attivo viene dai transcript", r5["active"], 900.0)
+# La scrittura di cache e' divisa per durata nei transcript e no nella
+# telemetria: qui si riunisce, altrimenti i due totali non sarebbero comparabili
+verifica("cache write 5m e 1h riunite", r5["tokens"]["cache_creation"], 400.0)
+verifica("totale token dai transcript", r5["total_tokens"], 5700.0)
+# Le righe di codice esistono solo nella telemetria: affiancarle non duplica
+verifica("le metriche di sola telemetria si affiancano",
+         r5["extra"].get("claude_code.lines_of_code.count"), 420.0)
+
+# Una postazione che ha solo la telemetria: l'agente non gira, ma deve comparire
+st5.add([punto("claude_code.cost.usage", 7.0, 1, 1900.0, "b@x.it", "s9")])
+righe5 = {r["person"]: r for r in cc.team_rows(st5)}
+verifica("chi ha solo la telemetria compare comunque",
+         righe5["b@x.it"]["source"], "telemetria")
+verifica("e il suo costo viene da li'", righe5["b@x.it"]["cost"], 7.0)
+verifica("chi ha solo i transcript resta segnato come tale",
+         righe5["a@x.it"]["source"], "transcript")
+
+# Una sessione cresciuta si aggiorna, non si somma
+st5.add_sessions("m-1", [{
+    "session_id": "s1", "user": "a@x.it", "project": "Alfa",
+    "start": 1000.0, "end": 3000.0, "duration": 2000.0, "active": 1500.0,
+    "cost": 800.0, "tokens": {}, "per_month": {},
+}])
+righe5 = {r["person"]: r for r in cc.team_rows(st5)}
+verifica("una sessione cresciuta sostituisce, non somma",
+         righe5["a@x.it"]["cost"], 800.0)
+
+# Un invio arrivato fuori ordine non riporta indietro il conto
+scritte, ignorate = st5.add_sessions("m-1", [{
+    "session_id": "s1", "user": "a@x.it", "end": 2500.0, "cost": 111.0,
+    "tokens": {}, "per_month": {},
+}])
+verifica("un invio piu' vecchio viene ignorato", (scritte, ignorate), (0, 1))
+verifica("e il conto resta quello buono",
+         {r["person"]: r for r in cc.team_rows(st5)}["a@x.it"]["cost"], 800.0)
+
+# --------------------------------------------------------------------------- #
+
 print("\nModello di costo del team")
 print("-" * 72)
 
@@ -153,6 +216,21 @@ st4.add([punto("claude_code.cost.usage", 1.0, 1, adesso - 60 * 86400, "a@x.it", 
 st4.add([punto("claude_code.cost.usage", 1.0, 1, adesso, "a@x.it", "s2")])
 verifica("mesi di calendario coperti dai dati",
          cc.observed_months(st4)[0] >= 2, True)
+
+# La finestra va presa da entrambe le tabelle. Con la telemetria accesa oggi e
+# transcript di mesi, contare solo la telemetria darebbe un mese di quota
+# contro mesi di consumo, e una resa gonfiata nella stessa proporzione.
+st6 = store()
+st6.add([punto("claude_code.cost.usage", 1.0, 1, adesso, "a@x.it", "s1")])
+solo_telemetria = cc.observed_months(st6)[0]
+st6.add_sessions("m-1", [{
+    "session_id": "vecchia", "user": "a@x.it",
+    "start": adesso - 100 * 86400, "end": adesso - 95 * 86400,
+    "cost": 10.0, "tokens": {}, "per_month": {},
+}])
+con_transcript = cc.observed_months(st6)[0]
+verifica("con la sola telemetria la finestra e' corta", solo_telemetria, 1)
+verifica("i transcript allargano la finestra", con_transcript >= 4, True)
 
 # --------------------------------------------------------------------------- #
 

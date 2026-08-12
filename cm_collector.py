@@ -539,6 +539,19 @@ def totals(store: Store, by: str = "all", since: float | None = None) -> dict:
     return out
 
 
+# Metriche che esistono SOLO nella telemetria: i transcript non le conoscono,
+# quindi si possono affiancare senza rischio di contare due volte la stessa cosa.
+SOLO_TELEMETRIA = (
+    "claude_code.lines_of_code.count",
+    "claude_code.commit.count",
+    "claude_code.pull_request.count",
+    "claude_code.subagent.spawn",
+    "claude_code.tool.execution",
+    "claude_code.mcp.rpc",
+    "claude_code.compaction",
+)
+
+
 SEP = "\x1f"  # separatore fra chiave e sottochiave, non stampabile
 
 
@@ -588,6 +601,9 @@ def team_rows(store: Store, since: float | None = None) -> list[dict]:
        dollari si prende tutto il canone. Per il team la cifra buona e' quella
        di team_costs(), cioe' postazioni per quota, non questa.
     """
+    # 1. Base dai transcript: e' la fonte completa, copre anche il passato.
+    per_persona = righe_da_sessioni(store, since)
+
     tot = totals(store, "user", since)
     per_tipo = aggregate_pair(store, "claude_code.token.usage", "user", "type", since)
     per_modello = aggregate_pair(store, "claude_code.cost.usage", "user", "model", since)
@@ -598,35 +614,131 @@ def team_rows(store: Store, since: float | None = None) -> list[dict]:
     for r in store.query(sql, (since,) if since else ()):
         ultimi[r["g"]] = r["ultimo"]
 
-    righe = []
+    # 2. Telemetria. Per una postazione che ha gia' i transcript NON si somma
+    #    niente di cio' che i transcript sanno gia': sarebbe la stessa sessione
+    #    contata due volte. Si prende solo cio' che i transcript non hanno.
     for persona, vals in tot.items():
-        tok = {v: 0.0 for v in TOKEN_TYPES.values()}
-        for grezzo, val in (per_tipo.get(persona) or {}).items():
-            campo = TOKEN_TYPES.get(grezzo)
-            if campo:
-                tok[campo] += val
-        modelli = sorted(
-            (m for m in (per_modello.get(persona) or {}) if m != "(ignoto)"),
-            key=lambda m: per_modello[persona][m], reverse=True)
-        righe.append({
-            "person":   persona,
-            "cost":     vals.get("claude_code.cost.usage", 0.0),
-            "sessions": int(vals.get("claude_code.session.count", 0)),
-            "active":   vals.get("claude_code.active_time.total", 0.0),
-            "tokens":   tok,
-            "total_tokens": sum(tok.values()),
-            "models":   modelli,
-            "last":     ultimi.get(persona, 0.0),
-        })
+        riga = per_persona.get(persona)
+        if riga is None:
+            tok = {v: 0.0 for v in TOKEN_TYPES.values()}
+            for grezzo, val in (per_tipo.get(persona) or {}).items():
+                campo = TOKEN_TYPES.get(grezzo)
+                if campo:
+                    tok[campo] += val
+            riga = per_persona[persona] = {
+                "person":   persona,
+                "cost":     vals.get("claude_code.cost.usage", 0.0),
+                "sessions": int(vals.get("claude_code.session.count", 0)),
+                "active":   vals.get("claude_code.active_time.total", 0.0),
+                "projects": 0,
+                "tokens":   tok,
+                "total_tokens": sum(tok.values()),
+                "models":   sorted(
+                    (m for m in (per_modello.get(persona) or {}) if m != "(ignoto)"),
+                    key=lambda m: per_modello[persona][m], reverse=True),
+                "last":     0.0,
+                "_quota_locale": 0.0,
+                "source":   "telemetria",
+            }
+        else:
+            # modelli visti solo dalla telemetria: elencarli non duplica numeri
+            for m in (per_modello.get(persona) or {}):
+                if m != "(ignoto)" and m not in riga["models"]:
+                    riga["models"].append(m)
+
+        riga["extra"] = {m: vals[m] for m in SOLO_TELEMETRIA if m in vals}
+        # "ultima attivita'" e' un massimo, non una somma: prenderlo da entrambe
+        # le fonti non conta nulla due volte.
+        riga["last"] = max(riga.get("last") or 0.0, ultimi.get(persona, 0.0))
+
+    righe = list(per_persona.values())
+    for r in righe:
+        r.setdefault("extra", {})
+        r.setdefault("projects", 0)
     righe.sort(key=lambda r: r["cost"], reverse=True)
     return righe
 
 
+def righe_da_sessioni(store: Store, since: float | None = None) -> dict[str, dict]:
+    """Una riga per postazione ricavata dalle sessioni spedite da cm_agent.
+
+    E' la fonte da preferire per costo, token e tempo: copre anche i mesi
+    precedenti all'accensione della telemetria, che altrimenti sparirebbero.
+    """
+    dove, args = "", []
+    if since:
+        dove, args = " WHERE ended >= ?", [since]
+    fuori: dict[str, dict] = {}
+    sql = ("SELECT COALESCE(user_key,'(non identificato)') AS persona,"
+           " COUNT(*) AS n, SUM(cost) AS costo, SUM(active) AS attivo,"
+           " SUM(real_cost) AS quota, MAX(ended) AS ultimo,"
+           " COUNT(DISTINCT project) AS progetti"
+           " FROM sessions" + dove + " GROUP BY persona")
+    for r in store.query(sql, tuple(args)):
+        fuori[r["persona"]] = {
+            "person": r["persona"],
+            "cost": r["costo"] or 0.0,
+            "sessions": r["n"] or 0,
+            "active": r["attivo"] or 0.0,
+            "projects": r["progetti"] or 0,
+            "last": r["ultimo"] or 0.0,
+            # Non esposto come spesa del team: e' la quota ripartita secondo la
+            # configurazione della singola macchina, non postazioni per quota.
+            "_quota_locale": r["quota"] or 0.0,
+            "tokens": {"input": 0.0, "output": 0.0,
+                       "cache_read": 0.0, "cache_creation": 0.0},
+            "models": [],
+            "source": "transcript",
+        }
+
+    # token e modelli stanno dentro JSON, quindi si sommano in Python
+    sql = ("SELECT COALESCE(user_key,'(non identificato)') AS persona,"
+           " tokens, per_month FROM sessions" + dove)
+    for r in store.query(sql, tuple(args)):
+        riga = fuori.get(r["persona"])
+        if riga is None:
+            continue
+        try:
+            tok = json.loads(r["tokens"] or "{}")
+        except ValueError:
+            tok = {}
+        riga["tokens"]["input"] += float(tok.get("input") or 0)
+        riga["tokens"]["output"] += float(tok.get("output") or 0)
+        riga["tokens"]["cache_read"] += float(tok.get("cache_read") or 0)
+        # il parser divide la scrittura di cache per durata, la telemetria no:
+        # qui si riuniscono per poter confrontare le due fonti
+        riga["tokens"]["cache_creation"] += (
+            float(tok.get("cache_w5m") or 0) + float(tok.get("cache_w1h") or 0))
+        try:
+            mesi = json.loads(r["per_month"] or "{}")
+        except ValueError:
+            mesi = {}
+        for modelli in mesi.values():
+            for nome in modelli:
+                if nome not in riga["models"]:
+                    riga["models"].append(nome)
+
+    for riga in fuori.values():
+        riga["total_tokens"] = sum(riga["tokens"].values())
+    return fuori
+
+
 def observed_months(store: Store, since: float | None = None) -> tuple[int, float, float]:
-    """Mesi di calendario toccati dai dati, e gli estremi della finestra."""
-    sql = ("SELECT MIN(ts) AS a, MAX(ts) AS b FROM points"
-           + (" WHERE ts >= ?" if since else ""))
-    r = store.query(sql, (since,) if since else ())[0]
+    """Mesi di calendario toccati dai dati, e gli estremi della finestra.
+
+    Guarda ENTRAMBE le tabelle. Guardare solo la telemetria darebbe un mese
+    quando i transcript ne coprono quattro, e la resa risulterebbe quattro
+    volte troppo alta: la quota di un mese contro il consumo di quattro.
+    """
+    dove = " WHERE ts >= ?" if since else ""
+    dove_s = " WHERE ended >= ?" if since else ""
+    args = (since,) if since else ()
+    r = store.query(
+        f"SELECT MIN(a) AS a, MAX(b) AS b FROM ("
+        f"  SELECT MIN(ts) AS a, MAX(ts) AS b FROM points{dove}"
+        f"  UNION ALL"
+        f"  SELECT MIN(started) AS a, MAX(ended) AS b FROM sessions{dove_s})",
+        args + args)[0]
     a, b = r["a"], r["b"]
     if not a or not b:
         return (0, 0.0, 0.0)

@@ -1084,6 +1084,8 @@ TEAM_COLUMNS = [
     ("share",    "Quota del consumo", 150, "e", lambda r: r["cost"], lambda r: ""),
     ("sessions", "Sess",        55, "e", lambda r: r["sessions"],
      lambda r: r["sessions"]),
+    ("projects", "Prog",        50, "e", lambda r: r.get("projects", 0),
+     lambda r: r.get("projects") or "—"),
     ("active",   "Attivo",      80, "e", lambda r: r["active"],
      lambda r: Fmt.dur(r["active"])),
     ("tok",      "Token",       80, "e", lambda r: r["total_tokens"],
@@ -2572,7 +2574,15 @@ class App:
                              f"su {mesi} {'mese' if mesi == 1 else 'mesi'}")
         elif righe:
             parti.append("postazioni pagate non dichiarate — "
-                         "aggiungi \"team\" in config.json per la spesa")
+                         "dichiarale in Configura ▸ Team per vedere la spesa")
+        # Da dove viene ogni riga: una postazione senza agente mostra solo
+        # quello che la telemetria ha visto da quando e' stata accesa, che di
+        # solito e' molto meno del vero. Meglio dirlo che lasciarlo intuire.
+        sole_tel = [r_ for r_ in righe if r_.get("source") == "telemetria"]
+        if sole_tel and len(sole_tel) != len(righe):
+            parti.append(f"{len(sole_tel)} senza storico (manca cm_agent)")
+        elif sole_tel:
+            parti.append("solo telemetria: manca lo storico precedente")
         if etichetta:
             parti.append(f"riservatezza: {etichetta}")
         self.team_hint = nota or "  ·  ".join(parti)
@@ -2593,6 +2603,7 @@ class App:
             "person":   f"{len(righe)} postazioni",
             "cost":     Fmt.cost(sum(r_["cost"] for r_ in righe)),
             "sessions": str(sum(r_["sessions"] for r_ in righe)),
+            "projects": str(sum(r_.get("projects", 0) for r_ in righe)) or "—",
             "active":   Fmt.dur(sum(r_["active"] for r_ in righe)),
             "tok":      Fmt.tokens(sum(r_["total_tokens"] for r_ in righe)),
             "cr":       Fmt.tokens(sum(r_["tokens"]["cache_read"] for r_ in righe)),
