@@ -288,6 +288,25 @@ try:
     verifica("con il raccoglitore spento lo dice",
              "NON RAGGIUNGIBILE" in buf.getvalue(), True)
 
+    print("\nRelazione in Markdown")
+    print("-" * 72)
+    md = cc.relazione_markdown(
+        store, {"seats": 8, "fee_per_seat": 30.0, "currency": "EUR"},
+        usd_per_unit=1.08)
+    verifica("dichiara il livello di riservatezza", "pseudonimo" in md, True)
+    verifica("dice le postazioni ferme e quanto costano",
+             "5 postazioni mai usate" in md, True)
+    verifica("elenca i progetti", "Commessa Alfa" in md, True)
+    verifica("avverte sulle postazioni senza agente",
+             "parziali per difetto" in md, True)
+    verifica("spiega che il valore a listino non si paga",
+             "non si paga" in md, True)
+    verifica("dichiara cosa non viene raccolto",
+             "Cosa non c'è in questi dati" in md, True)
+    # Un riepilogo che porta fuori un indirizzo vanifica il livello scelto.
+    verifica("non contiene indirizzi", "azienda.it" in md, False)
+    verifica("le tabelle sono chiuse", md.count("|---") >= 2, True)
+
     print("\nRiepilogo leggibile")
     print("-" * 72)
     ordinate = sorted(righe.values(), key=lambda r: r["cost"], reverse=True)

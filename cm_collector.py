@@ -768,6 +768,23 @@ def projects_of(store: Store, persona: str,
     return righe
 
 
+def projects_total(store: Store, since: float | None = None) -> list[dict]:
+    """Consumo per progetto su tutte le postazioni: la vista per le commesse."""
+    dove, args = "", []
+    if since:
+        dove, args = " WHERE ended >= ?", [since]
+    return [{
+        "project": r["progetto"], "sessions": r["n"], "cost": r["costo"] or 0.0,
+        "active": r["attivo"] or 0.0, "people": r["persone"],
+        "last": r["ultimo"] or 0.0,
+    } for r in store.query(
+        "SELECT COALESCE(project,'?') AS progetto, COUNT(*) AS n,"
+        " SUM(cost) AS costo, SUM(active) AS attivo,"
+        " COUNT(DISTINCT user_key) AS persone, MAX(ended) AS ultimo"
+        f" FROM sessions{dove} GROUP BY progetto ORDER BY costo DESC",
+        tuple(args))]
+
+
 def observed_months(store: Store, since: float | None = None) -> tuple[int, float, float]:
     """Mesi di calendario toccati dai dati, e gli estremi della finestra.
 
@@ -1166,6 +1183,118 @@ def setup_env(endpoint: str) -> dict:
     }
 
 
+def relazione_markdown(store: Store, team: dict,
+                       usd_per_unit: float | None = None,
+                       since: float | None = None) -> str:
+    """Riepilogo da portare a una riunione.
+
+    Le avvertenze non sono in fondo in piccolo ma dentro, accanto ai numeri che
+    limitano: un riepilogo che va spiegato a voce e' un riepilogo che verra'
+    letto male appena esce dalla stanza.
+    """
+    mesi, da, a = observed_months(store, since)
+    righe = team_rows(store, since)
+    righe, riep = team_costs(righe, team, mesi, usd_per_unit)
+    valuta = riep["currency"]
+    progetti = projects_total(store, since)
+
+    def soldi(v):
+        return f"{v:,.2f} {valuta}".replace(",", ".")
+
+    def quando(t):
+        return time.strftime("%d/%m/%Y", time.localtime(t)) if t else "—"
+
+    o = []
+    o.append("# Consumo di Claude Code — riepilogo")
+    o.append("")
+    o.append(f"Periodo coperto dai dati: **{quando(da)} – {quando(a)}** "
+             f"({mesi} {'mese' if mesi == 1 else 'mesi'}).  ")
+    o.append(f"Generato il {time.strftime('%d/%m/%Y alle %H:%M')}. "
+             f"Livello di dettaglio sulle persone: **{store.level}**.")
+    o.append("")
+
+    o.append("## In breve")
+    o.append("")
+    if riep["seats"]:
+        o.append(f"- Postazioni pagate: **{riep['seats']}**, di cui usate "
+                 f"**{riep['attive']}**.")
+        o.append(f"- Spesa nel periodo: **{soldi(riep['pagato_totale'])}**.")
+        if riep["dormienti"]:
+            o.append(f"- Di questa, **{soldi(riep['pagato_a_vuoto'])}** per "
+                     f"{riep['dormienti']} postazioni mai usate.")
+    else:
+        o.append("- Postazioni pagate non dichiarate: la spesa non è calcolabile. "
+                 "Impostala in Configura ▸ Team.")
+    o.append(f"- Valore dello stesso consumo a listino API: "
+             f"**${riep['api_totale']:,.2f}**, che con l'abbonamento non si paga.")
+    if riep["ratio"]:
+        o.append(f"- Rapporto fra i due: **{riep['ratio']:.1f}×**.")
+    o.append("")
+
+    o.append("## Per postazione")
+    o.append("")
+    o.append(f"| Postazione | Pagato | Se fosse API | Resa | Sess | Prog | "
+             f"Attivo | Fonte |")
+    o.append("|---|---:|---:|---:|---:|---:|---:|---|")
+    for r in righe:
+        resa = f"{r['ratio']:.1f}×" if r["ratio"] >= 0.1 else (
+            "<0,1×" if r["ratio"] else "—")
+        o.append(f"| {r['person']} | {soldi(r['paid']) if r['paid'] else '—'} "
+                 f"| ${r['cost']:,.2f} | {resa} | {r['sessions']} "
+                 f"| {r['projects'] or '—'} | {r['active'] / 3600:.1f} h "
+                 f"| {r['source']} |")
+    o.append("")
+    senza = [r for r in righe if r["source"] == "telemetria"]
+    if senza:
+        o.append(f"> {len(senza)} postazioni compaiono solo con la telemetria: "
+                 f"per quelle mancano lo storico precedente all'attivazione e "
+                 f"l'attribuzione ai progetti, quindi i loro numeri sono "
+                 f"**parziali per difetto**, non bassi.")
+        o.append("")
+
+    if progetti:
+        o.append("## Per progetto")
+        o.append("")
+        o.append("| Progetto | Se fosse API | Sess | Persone | Attivo |")
+        o.append("|---|---:|---:|---:|---:|")
+        for p in progetti:
+            o.append(f"| {p['project']} | ${p['cost']:,.2f} | {p['sessions']} "
+                     f"| {p['people']} | {p['active'] / 3600:.1f} h |")
+        o.append("")
+        o.append("> L'attribuzione ai progetti viene dai transcript letti sulle "
+                 "postazioni. La telemetria non sa su cosa si stia lavorando.")
+        o.append("")
+
+    o.append("## Come leggere questi numeri")
+    o.append("")
+    o.append("- **Pagato** è il numero di postazioni dichiarate per la quota "
+             "mensile, per i mesi coperti dai dati. Non è una fattura letta.")
+    o.append("- **Se fosse API** è quanto costerebbe lo stesso consumo pagato a "
+             "chiamata. Con l'abbonamento non viene addebitato: serve a "
+             "misurare il valore, non la spesa.")
+    o.append("- **Resa** è il rapporto fra i due. Con l'abbonamento ogni "
+             "postazione costa uguale che venga usata o no, quindi la domanda "
+             "utile non è quanto ha speso una persona — la risposta è sempre la "
+             "stessa cifra — ma quanto ha reso la postazione.")
+    o.append("- Le **postazioni mai usate** non si osservano: chi non usa lo "
+             "strumento non manda nulla. Si deducono da quante se ne pagano.")
+    o.append("")
+    o.append("## Cosa non c'è in questi dati")
+    o.append("")
+    o.append("Non vengono raccolti il testo delle richieste e delle risposte, i "
+             "titoli delle conversazioni, i percorsi dei file né la cartella di "
+             "lavoro. Il riepilogo misura il consumo, non il contenuto del "
+             "lavoro.")
+    if store.level == "pseudonimo":
+        o.append("")
+        o.append("Le postazioni sono indicate da un codice: il collegamento con "
+                 "le persone richiede una chiave custodita separatamente.")
+    elif store.level == "aggregato":
+        o.append("")
+        o.append("Non è conservato alcun identificativo di persona.")
+    return "\n".join(o) + "\n"
+
+
 def h_ago(quando: float | None) -> str:
     if not quando:
         return "mai"
@@ -1476,6 +1605,9 @@ def main(argv=None) -> int:
     ap.add_argument("--since", help="finestra temporale, es. 7d, 24h, 30m")
     ap.add_argument("--setup", action="store_true",
                     help="stampa la configurazione da applicare a Claude Code")
+    ap.add_argument("--relazione", nargs="?", const="-", metavar="FILE",
+                    help="riepilogo in Markdown da portare a una riunione "
+                         "(senza FILE stampa a schermo)")
     ap.add_argument("--status", action="store_true",
                     help="stato della catena: chi manda, chi e' fermo")
     ap.add_argument("--setup-service", action="store_true",
@@ -1501,6 +1633,28 @@ def main(argv=None) -> int:
 
     if args.status:
         return print_status(Store(args.db), f"http://{args.host}:{args.port}")
+
+    if args.relazione:
+        cfg = {}
+        for cand in ("config.json", os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "config.json")):
+            if os.path.isfile(cand):
+                try:
+                    with open(cand, encoding="utf-8") as fh:
+                        cfg = json.load(fh)
+                    break
+                except ValueError:
+                    pass
+        cambio = ((cfg.get("fx") or {}).get("usd_per_unit"))
+        testo = relazione_markdown(Store(args.db), cfg.get("team") or {},
+                                   cambio, parse_since(args.since))
+        if args.relazione == "-":
+            print(testo)
+        else:
+            with open(args.relazione, "w", encoding="utf-8") as fh:
+                fh.write(testo)
+            print(f"scritto {args.relazione} ({len(testo)} caratteri)")
+        return 0
 
     privacy = make_privacy(args.privacy, args.key)
     store = Store(args.db, privacy, args.privacy)
