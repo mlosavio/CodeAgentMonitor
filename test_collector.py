@@ -109,6 +109,52 @@ verifica("modelli elencati", righe["a@x.it"]["models"], ["claude-opus-5"])
 
 # --------------------------------------------------------------------------- #
 
+print("\nModello di costo del team")
+print("-" * 72)
+
+righe_team = [
+    {"person": "anna@x.it",  "cost": 420.0, "sessions": 88, "active": 0.0,
+     "tokens": {}, "total_tokens": 0, "models": [], "last": 0.0},
+    {"person": "bruno@x.it", "cost": 180.0, "sessions": 41, "active": 0.0,
+     "tokens": {}, "total_tokens": 0, "models": [], "last": 0.0},
+    {"person": "carla@x.it", "cost": 12.0, "sessions": 3, "active": 0.0,
+     "tokens": {}, "total_tokens": 0, "models": [], "last": 0.0},
+]
+team = {"seats": 8, "fee_per_seat": 30.0, "currency": "EUR"}
+arricchite, riep = cc.team_costs(list(righe_team), team, 3, usd_per_unit=1.08)
+
+verifica("ogni postazione costa uguale", arricchite[0]["paid"], 90.0)
+verifica("postazioni attive contate", riep["attive"], 3)
+# Chi non usa lo strumento non manda telemetria: le dormienti non si osservano,
+# si deducono dal numero dichiarato. Senza dichiararlo restano invisibili.
+verifica("dormienti dedotte dal dichiarato", riep["dormienti"], 5)
+verifica("spesa totale su tutte le postazioni", riep["pagato_totale"], 720.0)
+verifica("quota pagata a vuoto", riep["pagato_a_vuoto"], 450.0)
+verifica("resa di chi lo usa davvero", round(arricchite[0]["ratio"], 2), 4.32)
+verifica("resa complessiva tiene conto delle dormienti",
+         round(riep["ratio"], 2), 0.79)
+
+# Senza postazioni dichiarate le colonne di spesa restano spente, invece di
+# mostrare uno zero che sembrerebbe "non costa niente".
+_, vuoto = cc.team_costs(list(righe_team), {}, 3, usd_per_unit=1.08)
+verifica("senza postazioni dichiarate: nessuna spesa", vuoto["pagato_totale"], 0.0)
+verifica("senza postazioni dichiarate: nessuna resa", vuoto["ratio"], 0.0)
+
+# Con valute diverse e nessun cambio noto il rapporto non e' calcolabile:
+# meglio non mostrarlo che confrontare unita' diverse.
+_, senza_cambio = cc.team_costs(list(righe_team), team, 3, usd_per_unit=None)
+verifica("valute diverse senza cambio: nessun rapporto", senza_cambio["ratio"], 0.0)
+
+st4 = store()
+import time as _t
+adesso = _t.time()
+st4.add([punto("claude_code.cost.usage", 1.0, 1, adesso - 60 * 86400, "a@x.it", "s1")])
+st4.add([punto("claude_code.cost.usage", 1.0, 1, adesso, "a@x.it", "s2")])
+verifica("mesi di calendario coperti dai dati",
+         cc.observed_months(st4)[0] >= 2, True)
+
+# --------------------------------------------------------------------------- #
+
 print("\nRiservatezza")
 print("-" * 72)
 

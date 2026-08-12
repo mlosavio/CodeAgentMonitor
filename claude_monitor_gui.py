@@ -1073,22 +1073,26 @@ MONTH_COLUMNS = [
 # transcript locali (che contengono solo il proprio lavoro) ma l'archivio del
 # raccoglitore, alimentato dalla telemetria nativa di tutte le macchine.
 TEAM_COLUMNS = [
-    ("person",   "Postazione", 170, "w", lambda r: str(r["person"]).lower(),
+    ("person",   "Postazione", 160, "w", lambda r: str(r["person"]).lower(),
      lambda r: r["person"]),
-    ("cost",     "Se fosse API", 110, "e", lambda r: r["cost"],
+    ("paid",     "Hai pagato", 100, "e", lambda r: r.get("paid", 0),
+     lambda r: r.get("paid_txt", "—")),
+    ("cost",     "Se fosse API", 105, "e", lambda r: r["cost"],
      lambda r: Fmt.cost(r["cost"])),
-    ("share",    "Quota del consumo", 165, "e", lambda r: r["cost"], lambda r: ""),
-    ("sessions", "Sess",       55, "e", lambda r: r["sessions"],
+    ("ratio",    "Resa",        65, "e", lambda r: r.get("ratio", 0),
+     lambda r: r.get("ratio_txt", "—")),
+    ("share",    "Quota del consumo", 150, "e", lambda r: r["cost"], lambda r: ""),
+    ("sessions", "Sess",        55, "e", lambda r: r["sessions"],
      lambda r: r["sessions"]),
-    ("active",   "Attivo",     85, "e", lambda r: r["active"],
+    ("active",   "Attivo",      80, "e", lambda r: r["active"],
      lambda r: Fmt.dur(r["active"])),
-    ("tok",      "Token",      85, "e", lambda r: r["total_tokens"],
+    ("tok",      "Token",       80, "e", lambda r: r["total_tokens"],
      lambda r: Fmt.tokens(r["total_tokens"])),
-    ("cr",       "Cache R",    85, "e", lambda r: r["tokens"]["cache_read"],
+    ("cr",       "Cache R",     80, "e", lambda r: r["tokens"]["cache_read"],
      lambda r: Fmt.tokens(r["tokens"]["cache_read"])),
-    ("models",   "Modelli",   150, "w", lambda r: len(r["models"]),
+    ("models",   "Modelli",    130, "w", lambda r: len(r["models"]),
      lambda r: ", ".join(m.replace("claude-", "") for m in r["models"]) or "—"),
-    ("last",     "Ultima",     80, "e", lambda r: r["last"],
+    ("last",     "Ultima",      75, "e", lambda r: r["last"],
      lambda r: Fmt.ago(r["last"])),
 ]
 
@@ -1103,16 +1107,39 @@ def team_db_candidates(config: dict) -> list[str]:
                         "cm-team.db") if p]
 
 
+def fmt_ratio(value: float) -> str:
+    """Quante volte una postazione ha reso quello che costa.
+
+    Sotto un decimo si scrive '<0,1×' invece di arrotondare a zero: una
+    postazione che rende poco e una che non rende nulla sono cose diverse,
+    e la seconda e' la sola su cui abbia senso intervenire.
+    """
+    if not value:
+        return "—"
+    if value < 0.1:
+        return "<0,1×"
+    return f"{value:.1f}×".replace(".", ",")
+
+
+def team_money(value: float, currency: str) -> str:
+    """Importo nella valuta dell'abbonamento di team."""
+    simboli = {"EUR": "€", "USD": "$", "GBP": "£"}
+    s = simboli.get((currency or "").upper(), "")
+    txt = f"{value:,.2f}".replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+    return f"{s}{txt}" if s else f"{txt} {currency}"
+
+
 def load_team_rows(config: dict, since: float | None = None):
     """Righe per postazione dall'archivio del raccoglitore.
 
-    Restituisce (righe, livello_riservatezza, nota). La nota spiega perche' non
-    c'e' nulla, quando non c'e' nulla: senza, una scheda vuota sembra un guasto.
+    Restituisce (righe, livello_riservatezza, nota, riepilogo). La nota spiega
+    perche' non c'e' nulla, quando non c'e' nulla: senza, una scheda vuota
+    sembra un guasto.
     """
     try:
         import cm_collector
     except ImportError:
-        return [], None, "cm_collector.py non trovato accanto al pannello"
+        return [], None, "cm_collector.py non trovato accanto al pannello", {}
 
     for path in team_db_candidates(config):
         if not os.path.isfile(path):
@@ -1120,16 +1147,25 @@ def load_team_rows(config: dict, since: float | None = None):
         try:
             store = cm_collector.Store(path)          # sola lettura
             righe = cm_collector.team_rows(store, since)
+            mesi = cm_collector.observed_months(store, since)[0]
             store.con.close()
         except Exception as exc:                      # archivio illeggibile
-            return [], None, f"archivio non leggibile: {exc}"
+            return [], None, f"archivio non leggibile: {exc}", {}
         if not righe:
             return [], store.level, ("archivio presente ma ancora vuoto — "
-                                     "il raccoglitore non ha ricevuto dati")
-        return righe, store.level, ""
+                                     "il raccoglitore non ha ricevuto dati"), {}
+
+        team = config.get("team") or {}
+        righe, riepilogo = cm_collector.team_costs(
+            righe, team, mesi, cm.fx_usd_per_unit(config))
+        valuta = riepilogo["currency"]
+        for r in righe:
+            r["paid_txt"] = team_money(r["paid"], valuta) if r["paid"] else "—"
+            r["ratio_txt"] = fmt_ratio(r["ratio"])
+        return righe, store.level, "", riepilogo
 
     return [], None, ("nessun archivio di team: avvia il raccoglitore con "
-                      "python cm_collector.py")
+                      "python cm_collector.py"), {}
 
 
 # Spiegazioni al passaggio del mouse sull'intestazione.
@@ -1879,6 +1915,7 @@ class App:
         # Scheda Persone: fonte separata dai transcript, popolata dal raccoglitore
         self.team_rows: list[dict] = []
         self.team_hint = ""
+        self.team_summary: dict = {}
         self.live_stop: threading.Event | None = None
         self.live_gen = 0
         self.period_spec = None
@@ -2460,15 +2497,32 @@ class App:
             scope += f" · {needle}"
         self.l_scope.config(text=scope)
 
-    def _render_team(self, righe, livello, nota):
-        """Scheda Persone: consumo per postazione, dalla telemetria del team."""
+    def _render_team(self, righe, livello, nota, riepilogo=None):
+        """Scheda Persone: consumo e spesa per postazione, dal raccoglitore."""
         self.team_rows = righe
+        self.team_summary = riepilogo or {}
         etichetta = {
             "aggregato":  "aggregato · nessun identificativo di persona",
             "pseudonimo": "pseudonimo · codici a chiave, non indirizzi",
             "nominativo": "nominativo · indirizzi in chiaro",
         }.get(livello or "", "")
-        self.team_hint = nota or (f"riservatezza: {etichetta}" if etichetta else "")
+
+        parti = []
+        r = self.team_summary
+        if r.get("seats"):
+            parti.append(f"{r['attive']}/{r['seats']} postazioni usate")
+            # Il numero che interessa alla direzione: quota pagata e mai usata.
+            if r.get("dormienti"):
+                mesi = r["mesi"]
+                parti.append(f"{r['dormienti']} dormienti = "
+                             f"{team_money(r['pagato_a_vuoto'], r['currency'])} "
+                             f"su {mesi} {'mese' if mesi == 1 else 'mesi'}")
+        elif righe:
+            parti.append("postazioni pagate non dichiarate — "
+                         "aggiungi \"team\" in config.json per la spesa")
+        if etichetta:
+            parti.append(f"riservatezza: {etichetta}")
+        self.team_hint = nota or "  ·  ".join(parti)
         if self.segmented.index == 3:
             self.l_hint.config(text=self.team_hint)
 
@@ -2482,14 +2536,21 @@ class App:
         self.team_tbl.set_heading(
             "person", {"aggregato": "Insieme", "pseudonimo": "Postazione",
                        "nominativo": "Persona"}.get(livello or "", "Postazione"))
-        self.team_tbl.set_rows(righe, {
+        totali = {
             "person":   f"{len(righe)} postazioni",
-            "cost":     Fmt.cost(sum(r["cost"] for r in righe)),
-            "sessions": str(sum(r["sessions"] for r in righe)),
-            "active":   Fmt.dur(sum(r["active"] for r in righe)),
-            "tok":      Fmt.tokens(sum(r["total_tokens"] for r in righe)),
-            "cr":       Fmt.tokens(sum(r["tokens"]["cache_read"] for r in righe)),
-        })
+            "cost":     Fmt.cost(sum(r_["cost"] for r_ in righe)),
+            "sessions": str(sum(r_["sessions"] for r_ in righe)),
+            "active":   Fmt.dur(sum(r_["active"] for r_ in righe)),
+            "tok":      Fmt.tokens(sum(r_["total_tokens"] for r_ in righe)),
+            "cr":       Fmt.tokens(sum(r_["tokens"]["cache_read"] for r_ in righe)),
+        }
+        if r.get("pagato_totale"):
+            # Il totale pagato copre TUTTE le postazioni, dormienti comprese:
+            # sommare la colonna riga per riga darebbe una cifra piu' bassa e
+            # farebbe sparire proprio i soldi spesi per niente.
+            totali["paid"] = team_money(r["pagato_totale"], r["currency"])
+            totali["ratio"] = fmt_ratio(r.get("ratio", 0))
+        self.team_tbl.set_rows(righe, totali)
 
     # -- azioni ---------------------------------------------------------------- #
 

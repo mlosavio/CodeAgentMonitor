@@ -18,6 +18,14 @@
     "since": null
   },
 
+  "_team": "Scheda Persone: consumo di piu' macchine, dalla telemetria nativa di Claude Code raccolta da cm_collector.py. 'db' e' l'archivio del raccoglitore (null = cercalo accanto al pannello). 'seats' e' il numero di postazioni PAGATE: va dichiarato perche' le postazioni dormienti sono invisibili alla telemetria — chi non usa lo strumento non manda nulla, quindi non compare da nessuna parte. 'fee_per_seat' e' la quota mensile per postazione. Lasciare seats a 0 spegne le colonne di spesa e mostra solo il consumo.",
+  "team": {
+    "db": null,
+    "seats": 0,
+    "fee_per_seat": 0.0,
+    "currency": "EUR"
+  },
+
   "_fx": "Serve solo se paghi l'abbonamento in una valuta diversa dal listino API (che e' in USD): quanti USD vale un'unita' della tua valuta. null = non mostrare il rapporto di resa.",
   "fx": {
     "usd_per_unit": null,

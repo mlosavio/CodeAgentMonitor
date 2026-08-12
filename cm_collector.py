@@ -522,6 +522,69 @@ def team_rows(store: Store, since: float | None = None) -> list[dict]:
     return righe
 
 
+def observed_months(store: Store, since: float | None = None) -> tuple[int, float, float]:
+    """Mesi di calendario toccati dai dati, e gli estremi della finestra."""
+    sql = ("SELECT MIN(ts) AS a, MAX(ts) AS b FROM points"
+           + (" WHERE ts >= ?" if since else ""))
+    r = store.query(sql, (since,) if since else ())[0]
+    a, b = r["a"], r["b"]
+    if not a or not b:
+        return (0, 0.0, 0.0)
+    da = time.localtime(a)
+    db_ = time.localtime(b)
+    mesi = (db_.tm_year - da.tm_year) * 12 + (db_.tm_mon - da.tm_mon) + 1
+    return (max(1, mesi), a, b)
+
+
+def team_costs(righe: list[dict], team: dict, mesi: int,
+               usd_per_unit: float | None = None) -> tuple[list[dict], dict]:
+    """Quanto e' costata ogni postazione, e il riepilogo per la direzione.
+
+    Con l'abbonamento Team ogni postazione costa uguale, che venga usata o no.
+    La domanda utile non e' quindi "quanto ha speso Tizio" — la risposta e'
+    sempre la stessa cifra — ma quanto ha reso la postazione rispetto a quello
+    che si paga comunque.
+
+    Le postazioni dormienti sono l'altro numero, e sono invisibili alla
+    telemetria: chi non usa lo strumento non manda nulla, quindi non compare.
+    Vanno dedotte dal numero di postazioni pagate, che va dichiarato.
+    """
+    seats = int(team.get("seats") or 0)
+    fee = float(team.get("fee_per_seat") or 0.0)
+    rate = usd_per_unit if usd_per_unit else (
+        1.0 if (team.get("currency") or "USD").upper() == "USD" else None)
+
+    attive = sum(1 for r in righe if r["cost"] > 0)
+    dormienti = max(0, seats - attive) if seats else 0
+    per_postazione = fee * mesi
+
+    for r in righe:
+        r["paid"] = per_postazione
+        # Quante volte una postazione ha reso quello che costa. Senza cambio
+        # noto fra le due valute il rapporto non e' calcolabile: meglio niente
+        # che un numero che confronta unita' diverse.
+        r["ratio"] = (r["cost"] / (per_postazione * rate)) if (
+            per_postazione and rate) else 0.0
+
+    api_totale = sum(r["cost"] for r in righe)
+    pagato_totale = per_postazione * seats if seats else 0.0
+    riepilogo = {
+        "seats": seats,
+        "attive": attive,
+        "dormienti": dormienti,
+        "mesi": mesi,
+        "fee_per_seat": fee,
+        "currency": team.get("currency") or "USD",
+        "per_postazione": per_postazione,
+        "pagato_totale": pagato_totale,
+        "pagato_a_vuoto": per_postazione * dormienti,
+        "api_totale": api_totale,
+        "ratio": (api_totale / (pagato_totale * rate)) if (
+            pagato_totale and rate) else 0.0,
+    }
+    return righe, riepilogo
+
+
 # --------------------------------------------------------------------------- #
 # Formattazione
 # --------------------------------------------------------------------------- #
