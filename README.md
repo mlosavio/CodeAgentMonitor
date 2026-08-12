@@ -108,7 +108,9 @@ Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla 
 - **Persone** mostra il consumo di più macchine e compare popolata solo se hai avviato il
   [raccoglitore](#più-macchine-il-pannello-di-team). L'intestazione della prima colonna dice
   *Persona*, *Postazione* o *Insieme* a seconda del livello di riservatezza in vigore, così si
-  capisce senza chiedere se si stanno guardando persone o codici.
+  capisce senza chiedere se si stanno guardando persone o codici. **Doppio click su una
+  postazione** apre su cosa ha lavorato, progetto per progetto: è la vista per il ribaltamento
+  sulle commesse.
 - **Ogni intestazione ha la sua spiegazione** al passaggio del mouse.
 - **Doppio click su una sessione** apre la conversazione, rileggibile, con export in Markdown.
 - **Live**: la tessera di destra segue la sessione attiva e si aggiorna ogni 2 s leggendo solo
