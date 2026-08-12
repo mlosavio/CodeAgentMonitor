@@ -13,6 +13,7 @@ Nessuna dipendenza: si esegue com'e'.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -206,6 +207,68 @@ s = store("aggregato")
 s.add([punto("claude_code.cost.usage", 1.0, 1, 1000.0, "mario@azienda.it", "s1")])
 verifica("aggregato: nessuna identita conservata",
          cc.team_rows(s)[0]["person"], "(non identificato)")
+
+# --------------------------------------------------------------------------- #
+
+print("\nConfine di cio' che esce dalla macchina (cm_agent)")
+print("-" * 72)
+
+import cm_agent as ca
+
+# Una sessione con dentro tutto quello che il parser sa produrre, con valori
+# riconoscibili al posto dei campi che non devono uscire. Se uno di questi
+# ricompare nel payload serializzato, la prova cade.
+SENTINELLE = {
+    "title": "SEGRETO-titolo-con-nome-di-persona",
+    "first_prompt": "SEGRETO-testo-della-richiesta",
+    "cwd": r"C:\SEGRETO\Clienti\AcmeSpa",
+    "project_dir": r"C:\SEGRETO\percorso",
+    "files": [r"C:\SEGRETO\transcript.jsonl"],
+    "git_branch": "SEGRETO-TICKET-4471",
+    "agents": {"SEGRETO-agente": 1},
+    "ts": [1.0, 2.0],
+}
+sessione = {
+    "session_id": "abc-123", "project": "Progetto", "start": 1.0, "end": 2.0,
+    "duration": 1.0, "active": 1.0, "user_prompts": 3, "assistant_msgs": 40,
+    "tool_calls": 12, "cost": 1.23, "real_cost": 0.5, "billing": "subscription",
+    "tokens": {"input": 10, "output": 20, "nota": "SEGRETO-non-numerico"},
+    "per_month": {"2026-08": {"claude-opus-5": {"cost": 1.23}}},
+    **SENTINELLE,
+}
+
+fuori = ca.payload_sessione(sessione)
+serializzato = json.dumps(fuori, ensure_ascii=False)
+
+verifica("nessuna sentinella nel payload", "SEGRETO" in serializzato, False)
+verifica("i campi ammessi ci sono tutti",
+         sorted(fuori) == sorted(ca.CAMPI_SPEDITI), True)
+verifica("i token restano solo numeri", "nota" in fuori["tokens"], False)
+verifica("il costo passa", fuori["cost"], 1.23)
+verifica("la ripartizione mensile passa", "2026-08" in fuori["per_month"], True)
+
+# Il campo nuovo che nessuno ha aggiunto all'elenco resta a terra: e' il verso
+# giusto in cui sbagliare, e il motivo per cui l'elenco e' di inclusioni.
+sessione["campo_inventato_domani"] = "SEGRETO-nuovo"
+verifica("un campo nuovo non incluso non esce",
+         "SEGRETO" in json.dumps(ca.payload_sessione(sessione)), False)
+
+# Il controllo che gira prima di ogni invio, non solo qui.
+verifica("il controllo del confine non segnala falsi positivi",
+         ca.controlla_confine({"sessions": [fuori]}), [])
+verifica("il controllo del confine intercetta un campo di troppo",
+         ca.controlla_confine({"sessions": [dict(fuori, cwd="x")]}), ["cwd"])
+
+# Il filtro incrementale: rispedire tutto ogni volta e' sbagliato quanto non
+# rispedire una sessione cresciuta.
+sessioni = [{"session_id": "a", "end": 100.0}, {"session_id": "b", "end": 200.0}]
+verifica("senza stato si spedisce tutto",
+         len(ca.da_spedire(sessioni, {})), 2)
+verifica("gia' spedite e non cresciute: niente",
+         len(ca.da_spedire(sessioni, {"a": 100.0, "b": 200.0})), 0)
+verifica("una sessione cresciuta si rispedisce",
+         [s["session_id"] for s in ca.da_spedire(sessioni, {"a": 50.0, "b": 200.0})],
+         ["a"])
 
 # --------------------------------------------------------------------------- #
 

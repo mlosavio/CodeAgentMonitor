@@ -310,6 +310,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS points_dedup
 CREATE INDEX IF NOT EXISTS points_metric_ts ON points(metric, ts);
 CREATE INDEX IF NOT EXISTS points_user      ON points(user_key);
 CREATE INDEX IF NOT EXISTS points_session   ON points(session_id);
+
+-- Sessioni ricavate dai transcript e spedite da cm_agent.py. Sono una fonte
+-- diversa dai datapoint: coprono anche il passato, perche' i transcript sono
+-- gia' sul disco da mesi, e conoscono l'abbonamento, che la telemetria ignora.
+CREATE TABLE IF NOT EXISTS sessions (
+    machine       TEXT NOT NULL,
+    session_id    TEXT NOT NULL,
+    user_key      TEXT,
+    project       TEXT,
+    started       REAL,
+    ended         REAL,
+    duration      REAL,
+    active        REAL,
+    user_prompts  INTEGER,
+    assistant_msgs INTEGER,
+    tool_calls    INTEGER,
+    cost          REAL,      -- valore a listino API, in USD
+    real_cost     REAL,      -- quota dell'abbonamento attribuita, valuta locale
+    currency      TEXT,
+    billing       TEXT,      -- 'subscription' oppure 'api'
+    tokens        TEXT,      -- JSON: input/output/cache_read/cache_w5m/cache_w1h
+    per_month     TEXT,      -- JSON: ripartizione mensile del consumo
+    received      REAL NOT NULL,
+    PRIMARY KEY (machine, session_id)
+);
+
+CREATE INDEX IF NOT EXISTS sessions_user    ON sessions(user_key);
+CREATE INDEX IF NOT EXISTS sessions_project ON sessions(project);
+CREATE INDEX IF NOT EXISTS sessions_ended   ON sessions(ended);
 """
 
 
@@ -381,6 +410,62 @@ class Store:
         self.written += new
         self.duplicates += dup
         return (new, dup)
+
+    def add_sessions(self, machine: str, sessioni: list[dict]) -> tuple[int, int]:
+        """Registra o aggiorna le sessioni spedite da una macchina.
+
+        Una sessione cresce nel tempo: lo stesso identificativo torna piu' volte
+        con numeri piu' alti. Si sovrascrive solo se l'ultimo evento e' piu'
+        recente, cosi' un invio arrivato fuori ordine non riporta indietro il
+        conto — e un rinvio identico non cambia niente.
+        """
+        now = time.time()
+        scritte = ignorate = 0
+        with self.lock:
+            for s in sessioni:
+                sid = str(s.get("session_id") or "").strip()
+                if not sid:
+                    continue
+                p = self.privacy({
+                    "user_key": s.get("user"), "attrs": dict(s.get("attrs") or {}),
+                })
+                riga = (
+                    machine, sid, p["user_key"], s.get("project"),
+                    s.get("start"), s.get("end"), s.get("duration"), s.get("active"),
+                    s.get("user_prompts"), s.get("assistant_msgs"), s.get("tool_calls"),
+                    s.get("cost"), s.get("real_cost"), s.get("currency"),
+                    s.get("billing"),
+                    json.dumps(s.get("tokens") or {}, sort_keys=True),
+                    json.dumps(s.get("per_month") or {}, sort_keys=True),
+                    now,
+                )
+                cur = self.con.execute(
+                    "INSERT INTO sessions (machine, session_id, user_key, project,"
+                    " started, ended, duration, active, user_prompts, assistant_msgs,"
+                    " tool_calls, cost, real_cost, currency, billing, tokens,"
+                    " per_month, received)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                    " ON CONFLICT(machine, session_id) DO UPDATE SET"
+                    "   user_key=excluded.user_key, project=excluded.project,"
+                    "   started=excluded.started, ended=excluded.ended,"
+                    "   duration=excluded.duration, active=excluded.active,"
+                    "   user_prompts=excluded.user_prompts,"
+                    "   assistant_msgs=excluded.assistant_msgs,"
+                    "   tool_calls=excluded.tool_calls, cost=excluded.cost,"
+                    "   real_cost=excluded.real_cost, currency=excluded.currency,"
+                    "   billing=excluded.billing, tokens=excluded.tokens,"
+                    "   per_month=excluded.per_month, received=excluded.received"
+                    " WHERE excluded.ended > sessions.ended"
+                    "    OR sessions.ended IS NULL",
+                    riga)
+                # rowcount 1 = inserita o aggiornata; 0 = scartata dalla WHERE,
+                # cioe' l'invio portava dati piu' vecchi di quelli gia' presenti
+                if cur.rowcount:
+                    scritte += 1
+                else:
+                    ignorate += 1
+            self.con.commit()
+        return (scritte, ignorate)
 
     def query(self, sql: str, args=()) -> list[sqlite3.Row]:
         with self.lock:
@@ -487,6 +572,21 @@ def team_rows(store: Store, since: float | None = None) -> list[dict]:
 
     Vive qui e non nella GUI perche' sia verificabile da riga di comando:
         python cm_collector.py --report --by user
+
+    ATTENZIONE, due trappole quando si unira' questa fonte a quella delle
+    sessioni spedite da cm_agent.py:
+
+    1. Le due fonti si SOVRAPPONGONO. Una sessione fatta dopo l'accensione
+       della telemetria compare in entrambe: sommare i due costi la conta due
+       volte. Va scelta una fonte per grandezza — i transcript per costo, token
+       e tempo, perche' coprono anche il passato; la telemetria per cio' che i
+       transcript non hanno, come righe modificate, commit e PR.
+
+    2. Il campo real_cost delle sessioni e' la quota ripartita *per mese*
+       secondo la configurazione DI QUELLA macchina. Sommarlo per progetto da'
+       un risultato fuorviante: in un mese poco usato un progetto da pochi
+       dollari si prende tutto il canone. Per il team la cifra buona e' quella
+       di team_costs(), cioe' postazioni per quota, non questa.
     """
     tot = totals(store, "user", since)
     per_tipo = aggregate_pair(store, "claude_code.token.usage", "user", "type", since)
@@ -631,6 +731,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = f"cm-collector/{__version__}"
     store: Store = None       # iniettati da serve()
     verbose: bool = False
+    token: str | None = None
 
     def log_message(self, fmt, *args):  # silenzia il log per riga di default
         if self.verbose:
@@ -654,12 +755,43 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- rotte ------------------------------------------------------------- #
 
+    def _autorizzato(self) -> bool:
+        """Con --token, ogni invio deve portarlo. Senza, si accetta tutto.
+
+        Finche' l'ascolto e' su 127.0.0.1 il token non serve. Appena si apre
+        alla rete per far scrivere le altre macchine, serve: un raccoglitore
+        senza autenticazione accetta numeri da chiunque li mandi.
+        """
+        if not self.token:
+            return True
+        atteso = f"Bearer {self.token}"
+        return self.headers.get("Authorization", "") == atteso
+
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0].rstrip("/")
+        if not self._autorizzato():
+            self._json(401, {"error": "token mancante o errato"})
+            return
         try:
             raw = read_body(self)
         except Exception as exc:
             self._json(400, {"error": f"corpo illeggibile: {exc}"})
+            return
+
+        if path == "/v1/sessions":
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+                macchina = str(payload.get("machine") or "").strip() or "?"
+                scritte, ignorate = self.store.add_sessions(
+                    macchina, payload.get("sessions") or [])
+            except Exception as exc:
+                sys.stderr.write(f"[cm-collector] sessioni non scritte: {exc}\n")
+                self._json(400, {"error": str(exc)})
+                return
+            if self.verbose:
+                print(f"  sessioni da {macchina}: {scritte} scritte, "
+                      f"{ignorate} gia' aggiornate")
+            self._json(200, {"scritte": scritte, "ignorate": ignorate})
             return
 
         if path == "/v1/metrics":
@@ -978,9 +1110,11 @@ def print_report(store: Store, by: str, since: float | None) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def serve(store: Store, host: str, port: int, verbose: bool) -> None:
+def serve(store: Store, host: str, port: int, verbose: bool,
+          token: str | None = None) -> None:
     Handler.store = store
     Handler.verbose = verbose
+    Handler.token = token
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True
     nota = {
@@ -993,6 +1127,11 @@ def serve(store: Store, host: str, port: int, verbose: bool) -> None:
     print(f"  riservatezza {store.level} — {nota}")
     print(f"  cruscotto    http://{host}:{port}/")
     print(f"  ingresso     http://{host}:{port}/v1/metrics")
+    if token:
+        print("  accesso      protetto da token")
+    elif host not in ("127.0.0.1", "localhost"):
+        print("  ATTENZIONE   in ascolto sulla rete senza token: chiunque puo'")
+        print("               scrivere in archivio. Usa --token.")
     print()
     print("Ctrl+C per fermare.")
     try:
@@ -1037,6 +1176,9 @@ def main(argv=None) -> int:
                     help="livello di dettaglio sulle persone (default: pseudonimo)")
     ap.add_argument("--key", default="cm-pseudonimi.key",
                     help="file con la chiave di pseudonimizzazione, da custodire a parte")
+    ap.add_argument("--token", default=os.environ.get("CM_TOKEN"),
+                    help="token condiviso richiesto agli invii "
+                         "(o variabile CM_TOKEN). Obbligatorio se apri alla rete.")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="registra ogni invio ricevuto")
     args = ap.parse_args(argv)
@@ -1056,7 +1198,7 @@ def main(argv=None) -> int:
         print_report(store, args.by, parse_since(args.since))
         return 0
 
-    serve(store, args.host, args.port, args.verbose)
+    serve(store, args.host, args.port, args.verbose, args.token)
     return 0
 
 
