@@ -39,6 +39,7 @@ import sqlite3
 import sys
 import threading
 import time
+import urllib.request
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1165,6 +1166,92 @@ def setup_env(endpoint: str) -> dict:
     }
 
 
+def h_ago(quando: float | None) -> str:
+    if not quando:
+        return "mai"
+    d = time.time() - quando
+    if d < 90:
+        return f"{int(d)}s fa"
+    if d < 5400:
+        return f"{int(d // 60)}m fa"
+    if d < 172800:
+        return f"{int(d // 3600)}h fa"
+    return f"{int(d // 86400)}g fa"
+
+
+def print_status(store: Store, endpoint: str) -> int:
+    """Sta funzionando? Risposta in una schermata, senza scavare.
+
+    Distingue due cose che si confondono facilmente: quando una persona ha
+    lavorato, e quando la sua macchina ha parlato con noi. La seconda e' quella
+    che dice se il pezzo locale e' ancora vivo, ed e' l'unica che rivela un
+    agente fermo — che altrimenti si nota solo quando i numeri sembrano bassi.
+    """
+    problemi: list[str] = []
+    print("Stato della catena")
+    print("=" * 68)
+
+    try:
+        with urllib.request.urlopen(endpoint.rstrip("/") + "/healthz",
+                                    timeout=5) as r:
+            salute = json.loads(r.read().decode() or "{}")
+        print(f"  raccoglitore   {endpoint}  attivo (v{salute.get('versione')})")
+    except Exception as exc:
+        print(f"  raccoglitore   {endpoint}  NON RAGGIUNGIBILE ({exc})")
+        problemi.append("il raccoglitore non risponde: gli invii vanno persi "
+                        "finche' non torna")
+
+    n_p = store.query("SELECT COUNT(*) AS n FROM points")[0]["n"]
+    n_s = store.query("SELECT COUNT(*) AS n FROM sessions")[0]["n"]
+    print(f"  archivio       {os.path.abspath(store.path)}")
+    print(f"                 riservatezza {store.level} · "
+          f"{n_p} datapoint · {n_s} sessioni")
+
+    ultima_tel = store.query("SELECT MAX(ts) AS t FROM points")[0]["t"]
+    ultimo_ag = store.query("SELECT MAX(received) AS t FROM sessions")[0]["t"]
+    print(f"  ultima telemetria  {h_ago(ultima_tel)}")
+    print(f"  ultimo invio agente {h_ago(ultimo_ag)}")
+
+    righe = store.query(
+        "SELECT COALESCE(user_key,'(non identificato)') AS persona,"
+        " MAX(received) AS visto, COUNT(DISTINCT project) AS progetti,"
+        " COUNT(*) AS sessioni FROM sessions GROUP BY persona")
+    tel = {r["g"]: r["t"] for r in store.query(
+        "SELECT COALESCE(user_key,'(non identificato)') AS g, MAX(ts) AS t"
+        " FROM points GROUP BY g")}
+
+    print()
+    print(f"  {'postazione':22s} {'agente':>10s} {'telemetria':>12s} "
+          f"{'sess':>5s} {'prog':>5s}")
+    print("  " + "-" * 60)
+    viste = set()
+    for r in righe:
+        viste.add(r["persona"])
+        print(f"  {r['persona']:22s} {h_ago(r['visto']):>10s} "
+              f"{h_ago(tel.get(r['persona'])):>12s} "
+              f"{r['sessioni']:>5d} {r['progetti']:>5d}")
+        if r["visto"] and time.time() - r["visto"] > 86400:
+            problemi.append(f"{r['persona']}: l'agente non manda da "
+                            f"{h_ago(r['visto'])}")
+    for persona, quando in tel.items():
+        if persona not in viste:
+            print(f"  {persona:22s} {'mai':>10s} {h_ago(quando):>12s} "
+                  f"{'—':>5s} {'—':>5s}")
+            problemi.append(f"{persona}: nessun agente, manca tutto lo storico "
+                            f"e i progetti")
+    if not righe and not tel:
+        print("  (nessuna postazione ha ancora mandato niente)")
+
+    print()
+    if problemi:
+        print("Da guardare:")
+        for p in problemi:
+            print(f"  · {p}")
+        return 1
+    print("Nessun problema rilevato.")
+    return 0
+
+
 def print_service(host: str, port: int, db: str, privacy: str) -> None:
     """Come far sopravvivere il raccoglitore alla sessione che l'ha avviato.
 
@@ -1389,6 +1476,8 @@ def main(argv=None) -> int:
     ap.add_argument("--since", help="finestra temporale, es. 7d, 24h, 30m")
     ap.add_argument("--setup", action="store_true",
                     help="stampa la configurazione da applicare a Claude Code")
+    ap.add_argument("--status", action="store_true",
+                    help="stato della catena: chi manda, chi e' fermo")
     ap.add_argument("--setup-service", action="store_true",
                     help="stampa come installare il raccoglitore come servizio")
     ap.add_argument("--privacy", default="pseudonimo", choices=PRIVACY_LEVELS,
@@ -1409,6 +1498,9 @@ def main(argv=None) -> int:
     if args.setup_service:
         print_service(args.host, args.port, args.db, args.privacy)
         return 0
+
+    if args.status:
+        return print_status(Store(args.db), f"http://{args.host}:{args.port}")
 
     privacy = make_privacy(args.privacy, args.key)
     store = Store(args.db, privacy, args.privacy)

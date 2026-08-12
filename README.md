@@ -430,6 +430,23 @@ come servizio di sistema e con `--host` aperto oltre `127.0.0.1`; le postazioni 
 dati e non ricevono connessioni da nessuno. Appena apri alla rete serve `--token`, altrimenti
 chiunque può scrivere in archivio: l'avvio te lo dice.
 
+### Sta funzionando?
+
+```bat
+python cm_collector.py --status
+```
+
+Risponde in una schermata: raccoglitore raggiungibile, quanti dati ci sono, e per ogni postazione
+**quando ha parlato l'agente** e **quando è arrivata la telemetria**. Sono due cose diverse che è
+facile confondere: la prima dice se il pezzo locale è ancora vivo, la seconda quando qualcuno ha
+lavorato.
+
+Segnala da solo i due casi che altrimenti si notano tardi e male — una postazione il cui agente
+tace da più di un giorno, e una che manda telemetria ma non ha l'agente, quindi contribuisce ai
+totali ma non allo storico né alle commesse. In entrambi i casi i numeri *sembrano* bassi invece
+di essere dichiaratamente parziali. Esce con codice 1 se trova qualcosa, così si può mettere in
+un controllo automatico.
+
 ### Quanto grande può essere il gruppo
 
 `python test_carico.py 50 20` simula cinquanta postazioni che spediscono insieme. Misurato su un

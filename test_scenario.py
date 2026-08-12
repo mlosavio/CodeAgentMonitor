@@ -264,6 +264,30 @@ try:
     verifica("spesa totale", riep["pagato_totale"], 8 * 30.0 * mesi)
     verifica("pagata a vuoto", riep["pagato_a_vuoto"], 5 * 30.0 * mesi)
 
+    print("\nStato della catena")
+    print("-" * 72)
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        codice = cc.print_status(store, base)
+    testo = buf.getvalue()
+    # carla non ha l'agente: va segnalata, altrimenti il suo consumo sembra
+    # basso invece che parziale
+    verifica("rileva la postazione senza agente", codice, 1)
+    verifica("e lo dice per nome", "nessun agente" in testo, True)
+    verifica("il raccoglitore risulta raggiungibile",
+             "NON RAGGIUNGIBILE" in testo, False)
+    verifica("elenca tutte le postazioni",
+             all(p in testo for p in righe), True)
+    verifica("non mostra indirizzi", "azienda.it" in testo, False)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        cc.print_status(store, "http://127.0.0.1:1")   # porta chiusa
+    verifica("con il raccoglitore spento lo dice",
+             "NON RAGGIUNGIBILE" in buf.getvalue(), True)
+
     print("\nRiepilogo leggibile")
     print("-" * 72)
     ordinate = sorted(righe.values(), key=lambda r: r["cost"], reverse=True)
