@@ -1751,9 +1751,10 @@ class SettingsWindow(tk.Toplevel):
         self.pages = {}
         self.body = tk.Frame(self, bg=self.t["page"])
         self.body.pack(fill="both", expand=True, padx=18, pady=(10, 0))
-        self.seg = Segmented(nav, self.t,
-                             ["Abbonamento", "Team", "Aspetto", "Statusline", "Listino"],
-                             self._show_page)
+        # Un solo elenco: i segmenti e le pagine si indicizzano dallo stesso posto,
+        # altrimenti aggiungerne uno sposta il contenuto di tutti quelli dopo.
+        self.page_names = ["Abbonamento", "Team", "Aspetto", "Statusline", "Listino"]
+        self.seg = Segmented(nav, self.t, self.page_names, self._show_page)
 
         # ---- Abbonamento
         p = self._page("Abbonamento")
@@ -1905,6 +1906,8 @@ class SettingsWindow(tk.Toplevel):
         b_cancel.pack(side="right", padx=(0, 8))
 
         self.seg.pack(side="left")
+        assert list(self.pages) == self.page_names, (
+            f"segmenti e pagine non coincidono: {list(self.pages)} != {self.page_names}")
         self._show_page(0)
 
     # -- costruzione ------------------------------------------------------- #
@@ -1929,7 +1932,7 @@ class SettingsWindow(tk.Toplevel):
         return inner
 
     def _show_page(self, index):
-        name = ["Abbonamento", "Aspetto", "Statusline", "Listino"][index]
+        name = self.page_names[index]
         for key, frame in self.pages.items():
             frame.pack_forget()
         self.pages[name].pack(fill="both", expand=True)
@@ -2267,6 +2270,9 @@ class App:
         self.current_table = self.projects
         self._tables = (self.projects, self.sessions_tbl,
                         self.months_tbl, self.team_tbl)
+        assert len(self._tables) == len(self.segmented.buttons), (
+            "segmenti e tabelle non coincidono: "
+            f"{len(self.segmented.buttons)} contro {len(self._tables)}")
 
         # ---- barra di stato
         status = tk.Frame(root, bg=t["page"])
