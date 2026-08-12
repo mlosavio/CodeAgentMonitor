@@ -22,6 +22,25 @@ conversazioni/
 # Quelle pubblicabili, con i dati offuscati, stanno in docs/.
 screen/
 
+# Documenti interni all'azienda: assetti organizzativi, valutazioni sul
+# trattamento dei dati dei dipendenti, casi reali di dati personali trovati.
+# Questo repo e' pubblico: qui dentro non deve finire nulla di tutto cio'.
+interno/
+
+# Archivio della telemetria raccolta: contiene consumi per persona e per
+# sessione. E' un trattamento di dati dei lavoratori, non un file di lavoro.
+cm-team.db
+cm-team.db-wal
+cm-team.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+# Chiave di pseudonimizzazione. Va custodita SEPARATA dall'archivio: e' l'unica
+# cosa che permette di risalire dai codici alle persone. Insieme in un repo
+# sarebbe come lasciare la chiave nella toppa.
+*.key
+
 # Sistema operativo / editor
 Thumbs.db
 desktop.ini
