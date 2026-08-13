@@ -159,6 +159,39 @@ def prova_senza_progetto(tmp):
              ["(senza progetto)", "(senza progetto)"])
 
 
+def prova_percorsi_dei_tre_sistemi(tmp):
+    print("\nIl percorso del progetto, come lo scrive VS Code su ognuno dei tre sistemi")
+    # Non dipende dal sistema su cui girano le prove: e' la stessa funzione a
+    # dover leggere tutte e tre le forme, perche' l'archivio di una postazione
+    # puo' finire su un'altra — e perche' altrimenti questa prova sarebbe verde
+    # su Windows proprio dove il codice sbagliava.
+    d = os.path.join(tmp, "ws")
+    os.makedirs(d, exist_ok=True)
+
+    def percorso_da(uri):
+        with open(os.path.join(d, "workspace.json"), "w", encoding="utf-8") as fh:
+            json.dump({"folder": uri}, fh)
+        return cp._progetto_di(d)
+
+    nome, path = percorso_da("file:///c%3A/MLO/D/Projects/Tizio")
+    verifica("Windows: la lettera di unita' torna maiuscola", path, "C:/MLO/D/Projects/Tizio")
+    verifica("Windows: e il nome e' l'ultima cartella", nome, "Tizio")
+
+    nome, path = percorso_da("file:///home/tizio/Progetti/Caio")
+    verifica("Linux: il percorso resta assoluto", path, "/home/tizio/Progetti/Caio")
+    verifica("Linux: e non relativo", path.startswith("/"), True)
+    verifica("Linux: il nome e' l'ultima cartella", nome, "Caio")
+
+    nome, path = percorso_da("file:///Users/tizio/Progetti/Sempronio")
+    verifica("macOS: il percorso resta assoluto", path, "/Users/tizio/Progetti/Sempronio")
+    verifica("macOS: il nome e' l'ultima cartella", nome, "Sempronio")
+
+    nome, path = percorso_da("file:///home/tizio/Con%20Spazio")
+    verifica("gli spazi codificati tornano spazi", path, "/home/tizio/Con Spazio")
+
+    os.remove(os.path.join(d, "workspace.json"))
+
+
 def prova_testo(tmp):
     print("\nIl testo, solo se richiesto")
     scrivi_sessione(tmp, "abc", "s.json",
@@ -227,8 +260,8 @@ def main() -> int:
     print("Prove sulla sorgente Copilot")
     print("=" * 72)
     for prova in (prova_lettura, prova_niente_costo, prova_file_strani,
-                  prova_senza_progetto, prova_testo, prova_ordine,
-                  prova_integrazione):
+                  prova_senza_progetto, prova_percorsi_dei_tre_sistemi,
+                  prova_testo, prova_ordine, prova_integrazione):
         tmp = tempfile.mkdtemp(prefix="cam-copilot-")
         try:
             prova(tmp)

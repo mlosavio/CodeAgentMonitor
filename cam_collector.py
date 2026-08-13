@@ -1859,9 +1859,13 @@ def print_setup(endpoint: str, token: str | None = None) -> None:
     print()
     if token:
         print("L'intestazione porta il token, quindi chi usa la postazione lo")
-        print("puo' leggere: autorizza a scrivere in archivio, non a leggerlo.")
-        print("Senza, l'esportatore prende 401, ritenta in silenzio e smette —")
-        print("nessun errore da nessuna parte, solo telemetria che non arriva.")
+        print("puo' leggere — ed e' LO STESSO token che apre il cruscotto, dove")
+        print("si vede quanto consuma ogni collega. Distribuirlo e' quindi una")
+        print("decisione, non un dettaglio tecnico: o lo si accetta, o il")
+        print("cruscotto non va esposto alla rete.")
+        print("Senza token, l'esportatore prende 401, ritenta in silenzio e")
+        print("smette — nessun errore da nessuna parte, solo telemetria che")
+        print("non arriva.")
         print()
     elif not endpoint.startswith(("http://127.0.0.1", "http://localhost")):
         print("Il raccoglitore non e' in locale ma qui non c'e' nessun token.")

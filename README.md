@@ -57,6 +57,13 @@ copy config.example.json config.json
 python cam.py
 ```
 
+Su **Debian e Ubuntu** l'interfaccia grafica vuole un pacchetto in più: lì `tkinter` non
+arriva con Python, sta a parte. Il CLI funziona anche senza.
+
+```sh
+sudo apt install python3-tk        # solo per python cam_gui.py
+```
+
 Apri `config.json` (o il pulsante **Configura** nella GUI) e metti il tuo piano e quanto paghi
 al mese: è l'unico dato che il tool non può ricavare da solo.
 
@@ -1348,8 +1355,14 @@ motivo per cui l'archivio **non** è stato messo per la velocità.
 - **Il campo `real_cost` delle sessioni non va sommato per progetto**: è la quota ripartita per
   *mese*, quindi in un mese poco usato un progetto da pochi dollari si prende tutto il canone.
   Per il team la cifra buona è postazioni × quota, che è quella che il pannello mostra.
-- Sviluppato e provato su **Windows**. Il codice usa solo percorsi portabili (`expanduser`,
-  `USERPROFILE`/`LOCALAPPDATA`) ma su macOS e Linux non è stato testato: segnalazioni benvenute.
+- **Su Linux il CLI è provato, la GUI no.** Le 491 prove girano verdi su Ubuntu 22.04 con
+  Python 3.10, e il CLI è stato usato lì per davvero: riepilogo, turni, andamenti, archivio ed
+  export Markdown. `cam_gui.py` invece è solo stato compilato — il codice specifico di Windows
+  che contiene (registro dei temi, barra del titolo scura, apertura di una cartella) prende
+  strade diverse fuori da Windows, e quelle strade nessuno le ha ancora percorse.
+- **Su macOS non è stato provato niente.** Il codice tratta i suoi percorsi
+  (`~/Library/Application Support` per Copilot) e apre le cartelle con `open`, ma «dovrebbe
+  funzionare» non è «funziona». Segnalazioni benvenute.
 
 ---
 

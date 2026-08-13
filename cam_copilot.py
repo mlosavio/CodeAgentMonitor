@@ -84,11 +84,14 @@ def _progetto_di(cartella_hash: str) -> tuple[str | None, str | None]:
         return None, None
     if not uri:
         return None, None
-    # file:///c%3A/MLO/D/Projects/Tizio -> C:/MLO/D/Projects/Tizio
     p = urllib.parse.unquote(urllib.parse.urlparse(uri).path or "")
-    p = p.lstrip("/")
-    if len(p) > 1 and p[1] == ":":
-        p = p[0].upper() + p[1:]
+    # file:///c%3A/MLO/D/Projects/Tizio -> C:/MLO/D/Projects/Tizio
+    # La barra iniziale si toglie solo se davanti a una lettera di unita': su
+    # macOS e Linux e' parte del percorso, e toglierla lo renderebbe relativo —
+    # cioe' riferito alla cartella da cui e' partito il programma, che non
+    # c'entra niente.
+    if len(p) > 2 and p[0] == "/" and p[1].isalpha() and p[2] == ":":
+        p = p[1].upper() + p[2:]
     return (os.path.basename(p.rstrip("/\\")) or p or None), (p or None)
 
 

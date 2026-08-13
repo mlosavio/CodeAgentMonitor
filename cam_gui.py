@@ -107,6 +107,28 @@ def windows_prefers_dark() -> bool:
         return False
 
 
+def apri_cartella(dove: str) -> bool:
+    """Apre una cartella nel gestore file del sistema. True se ci e' riuscita.
+
+    Ogni sistema ha il suo comando e nessuno dei tre esiste sugli altri:
+    `os.startfile` c'e' solo su Windows, `open` solo su macOS. Il valore di
+    ritorno serve perche' chi ha appena risposto «si'» a «apro la cartella?»
+    deve sapere se e' successo: fallire in silenzio dopo una domanda e' peggio
+    che non averla fatta.
+    """
+    try:
+        if os.name == "nt":
+            os.startfile(dove)  # type: ignore[attr-defined]  # solo Windows
+        else:
+            import subprocess
+            comando = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.Popen([comando, dove],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
 class Theme:
     def __init__(self, mode: str):
         self.mode = mode
@@ -3724,10 +3746,9 @@ class App:
                     if messagebox.askyesno(APP_TITLE,
                                            f"Esportate {result['written']} conversazioni.\n\n"
                                            "Apro la cartella?"):
-                        try:
-                            os.startfile(dove)
-                        except Exception:
-                            pass
+                        if not apri_cartella(dove):
+                            self.l_status.config(
+                                text=f"⚠ non riesco ad aprire la cartella  ·  {dove}")
                 else:
                     _, _r, _d, err = payload
                     self._set_progress(0)

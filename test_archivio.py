@@ -136,8 +136,19 @@ def prova_cache(tmp, base):
         verifica("il file e' in cache", k in idx, True)
         verifica("con la sua dimensione", idx[k][0], st.st_size)
         verifica("e il record si rilegge", a.record(path)["session_id"], SID)
-        verifica("un percorso scritto diversamente e' lo stesso file",
-                 ar.chiave(path.replace("\\", "/").upper()) == k, True)
+        # Vale ovunque: i segmenti ridondanti spariscono, il file resta uno.
+        ovvio = os.path.join(os.path.dirname(path), ".", os.path.basename(path))
+        verifica("un percorso con segmenti in piu' e' lo stesso file",
+                 ar.chiave(ovvio) == k, True)
+        # Qui le due famiglie di sistemi si dividono, e la forma canonica deve
+        # dividersi con loro: su Windows Cartella\File e CARTELLA/FILE sono lo
+        # stesso file, su Linux e' un altro file — che potrebbe esistere davvero.
+        if os.path.normcase("A") == "a":
+            verifica("su Windows maiuscole e barre non contano",
+                     ar.chiave(path.replace("\\", "/").upper()) == k, True)
+        else:
+            verifica("su POSIX un altro modo di scrivere le maiuscole e' un altro file",
+                     ar.chiave(path.upper()) == k, False)
         verifica("un file mai visto non c'e'", a.record(path + ".altro"), None)
 
 

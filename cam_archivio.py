@@ -196,6 +196,10 @@ def chiave(path: str) -> str:
     ha costruito il percorso: maiuscole, barre, percorsi relativi. Senza una
     forma unica lo stesso transcript finirebbe in archivio due volte, e la
     seconda copia sembrerebbe lavoro in piu' che non e' mai esistito.
+
+    Su macOS e Linux `normcase` non tocca le maiuscole, ed e' giusto cosi':
+    li' `Sessione.jsonl` e `SESSIONE.jsonl` sono due file diversi che possono
+    esistere entrambi. Appiattirli renderebbe uno invisibile all'altro.
     """
     return os.path.normcase(os.path.abspath(path))
 

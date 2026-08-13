@@ -21,9 +21,10 @@ quello che manca.
 | [PF08](#pf08--modelli-con-finestra-da-1m-al-prezzo-sbagliato) | Modelli con finestra da 1M al prezzo sbagliato | **fatto** 13/08 | — |
 | [PF09](#pf09--i-timestamp-sono-il-60-della-cache-di-analisi) | I timestamp sono il 60% della cache di analisi | **fatto** 13/08 | — |
 | [PF10](#pf10--manutenzione-dellarchivio) | Manutenzione dell'archivio | **fatto** 13/08 | — |
-| [PF11](#pf11--prove-su-macos-e-linux) | Prove su macOS e Linux | da fare | — |
+| [PF11](#pf11--prove-su-macos-e-linux) | Prove su macOS e Linux | **Linux fatto** 13/08 · macOS sospesa | — |
 | [PF12](#pf12--le-postazioni-che-consumano-e-non-sono-in-fattura) | Le postazioni che consumano e non sono in fattura | **fatto** 13/08 | — |
 | [PF13](#pf13--andamento-delladozione-nel-team) | Andamento dell'adozione nel team | **fatto** 13/08 | PF04 |
+| [PF14](#pf14--il-raccoglitore-fuori-dalla-rete-aziendale) | Il raccoglitore fuori dalla rete aziendale | da fare | — |
 
 ---
 
@@ -290,14 +291,62 @@ guardare — oggi, dopo PF09, sono 1,1 MB.
 
 ### PF11 — Prove su macOS e Linux
 
-**Stato:** da fare · **Dipende da:** —
+**Stato:** in corso il 2026-08-13 — **Linux fatto, macOS no** · **Dipende da:** —
 
-Sviluppato e provato solo su Windows. Il codice usa percorsi portabili (`expanduser`,
-`USERPROFILE`/`LOCALAPPDATA`) e non ha dipendenze, ma «dovrebbe funzionare» non è «funziona».
+Provato su **Ubuntu 22.04 con Python 3.10.12**, in una cartella nativa e non su `/mnt/c`:
+altrimenti si prova un filesystem Windows travestito da Linux. Le **491 prove** sono verdi lì
+come qui, e il CLI è stato usato per davvero — riepilogo, `--traces`, `--trend`, `--archivio`,
+`--export-md` — con accenti e cornici al loro posto. Ricadute: il README non dice più
+«provato su Windows», dice cosa è provato e cosa no.
 
-Da verificare in particolare: la forma canonica dei percorsi in `cam_archivio.chiave()`
-(`normcase` si comporta diversamente), la barra del titolo scura della GUI (è codice Windows), e
-il fatto che le prove girino.
+Le tre cose da verificare erano indovinate. Ecco come sono andate.
+
+**`cam_archivio.chiave()` — il codice era giusto, la prova era sbagliata.** Su POSIX `normcase`
+non tocca le maiuscole, ed è **corretto**: lì `Sessione.jsonl` e `SESSIONE.jsonl` sono due file
+diversi che possono esistere entrambi, e appiattirli renderebbe uno invisibile all'altro. A
+cadere era la prova, che pretendeva l'insensibilità alle maiuscole ovunque. Ora si divide col
+sistema e dichiara il comportamento giusto da entrambe le parti — che è più di quanto facesse
+prima, quando su Windows era verde e su Linux non esisteva.
+
+**Il percorso dei progetti Copilot — bug vero, trovato solo perché si è provato.**
+`_progetto_di()` faceva `lstrip("/")` sul percorso estratto dall'URI: giusto per
+`file:///c%3A/…`, dove la barra precede la lettera di unità, **sbagliato ovunque altro**.
+Su macOS e Linux `file:///home/tizio/Progetti/X` diventava `home/tizio/Progetti/X` — un percorso
+**relativo**, cioè riferito alla cartella da cui è partito il programma, che non c'entra niente.
+Il nome del progetto restava giusto (è l'ultima cartella), quindi in interfaccia non si vedeva:
+sbagliava solo il percorso, che è quello che finisce in archivio. La barra ora si toglie solo
+davanti a una lettera di unità, e `prova_percorsi_dei_tre_sistemi` tiene ferme tutte e tre le
+forme **su qualunque sistema** — perché una prova che dipende da dove gira sarebbe stata verde
+su Windows proprio dove il codice sbagliava.
+
+**La GUI — non è la barra del titolo, è `os.startfile`.** La barra scura era già dietro
+`os.name != "nt"` e il registro dentro un `try`. Il vero problema era in fondo all'export:
+`os.startfile` **non esiste** fuori da Windows, e stava dentro un `except: pass`. Quindi su
+Linux la domanda «Apro la cartella?» riceveva un sì e poi non succedeva niente, senza che
+nessuno lo dicesse — una domanda a cui mentire è peggio di una domanda non fatta. Adesso c'è
+`apri_cartella()`, che usa `open` su macOS e `xdg-open` su Linux e **restituisce se ce l'ha
+fatta**; se no, lo scrive nella barra di stato.
+
+**Quello che resta, e la decisione presa il 13/08.**
+
+- **La GUI su Linux non è stata eseguita**, solo compilata. Su Debian e Ubuntu `tkinter` non
+  arriva con Python — è `python3-tk`, un pacchetto a parte, e su questa macchina l'installazione
+  voleva una password. È finito nel README fra i requisiti, perché «niente altro» lì era falso.
+- **macOS: sospesa, non scartata.** Nessuna delle tre correzioni è stata vista girare su un Mac:
+  sono scritte perché siano giuste lì, che non è la stessa cosa.
+
+**Perché Linux sì e macOS no.** Non sono lo stesso lavoro, perché i tre pezzi di CAM girano su
+macchine diverse e ognuno ha il suo sistema:
+
+| pezzo | dove gira | quale sistema |
+|---|---|---|
+| `cam.py`, `cam_gui.py` — la console | macchina dell'amministratore | Windows, ed è l'unico che conta |
+| `cam_agent.py` — su ogni postazione | ogni sviluppatore | quello che hanno loro |
+| `cam_collector.py` — il raccoglitore | il server | **Linux, se finisce su un VPS** — vedi PF14 |
+
+Linux era da fare perché è il sistema del raccoglitore appena esce dalla macchina di casa.
+macOS serve solo il giorno in cui una postazione è un Mac: **si riapre allora**, e le prove da
+rifare sono già scritte — `prova_percorsi_dei_tre_sistemi` non dipende dal sistema su cui gira.
 
 ---
 
@@ -343,3 +392,45 @@ Ricadute su `TrendChart`, che ora accetta una riga di riferimento e un dettaglio
 pluggabile: prima la seconda riga del tooltip era cablata sulle metriche personali (`turni`,
 `progetti`), e con una serie diversa sarebbe esplosa.
 
+### PF14 — Il raccoglitore fuori dalla rete aziendale
+
+**Stato:** da fare · **Dipende da:** —
+
+Il raccoglitore oggi è pensato per una LAN: una macchina sempre accesa, raggiungibile dalle
+postazioni, dietro il firewall aziendale. La domanda che lo mette in crisi è legittima e
+ricorrente — **i portatili che lavorano fuori sede** — e la risposta ovvia, un VPS con la porta
+aperta su Internet, oggi **non si può dare**. Tre ragioni, in ordine di gravità.
+
+**Non c'è TLS. Per niente.** `cam_collector.py` è un `ThreadingHTTPServer` in chiaro: in tutto il
+modulo non compare `ssl`. In LAN è una scelta difendibile; su un indirizzo pubblico vuol dire che
+passano in chiaro i percorsi dei progetti, i costi, gli indirizzi — e **il token stesso, a ogni
+richiesta**.
+
+**Il token è uno solo, e vale in lettura come in scrittura.** `_autorizzato()` non distingue le
+rotte, ed è documentato che sia così: un cruscotto aperto mostrerebbe a chiunque quanto consuma
+ogni persona. Ma la conseguenza è che **il token dato a ogni postazione per scrivere apre anche
+il cruscotto di tutti**. Il messaggio di `--setup` diceva l'opposto — «autorizza a scrivere in
+archivio, non a leggerlo» — ed è stato corretto il 13/08: era la frase che porta un
+amministratore a distribuirlo credendolo innocuo.
+
+**Su un VPS il livello «pseudonimo» si annulla da solo.** La regola dichiarata è che la chiave
+stia in una cartella diversa dall'archivio, con permessi diversi, «altrimenti lo annulla senza
+che nulla smetta di funzionare». Su un server affittato finiscono sullo stesso disco, sotto lo
+stesso root, dentro gli stessi snapshot del fornitore.
+
+E una conseguenza che non è di sicurezza ma si sente subito: **la GUI legge `cam-team.db` come
+file** (`team_db_candidates()`, nessun client HTTP nel modulo). Col raccoglitore su un VPS la
+scheda Persone non ha più niente da leggere, e all'amministratore resta il cruscotto web — che è
+un'altra interfaccia, non la sua.
+
+**La strada che non richiede di scrivere niente**, ed è quella da provare per prima: una rete
+privata (WireGuard, Tailscale) fra postazioni e VPS, col raccoglitore in ascolto **solo**
+sull'indirizzo dell'overlay e mai su `0.0.0.0`. Il VPS resta fuori sede per raggiungibilità —
+che è quello che serve ai portatili — ma il raccoglitore non è mai su Internet, HTTP in chiaro
+torna difendibile, e la GUI ritrova il suo file perché sull'overlay il VPS è una macchina di rete
+come le altre. Se funziona, questa PF si chiude **senza una riga di codice**, e quello che
+produce è documentazione.
+
+Da scrivere solo se quella strada non basta, in quest'ordine: TLS nel raccoglitore (o l'indicazione
+esplicita di un reverse proxy davanti, che è meno codice e più standard), e token distinti per
+lettura e scrittura. Il secondo è utile **anche in LAN**, indipendentemente dal VPS.
