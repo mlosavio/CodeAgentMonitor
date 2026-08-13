@@ -36,11 +36,12 @@ import sys
 import time
 
 import cm_archivio
+import cm_copilot
 import cm_statistiche as cm_stat
 
 __version__ = "1.0.0"
 
-CACHE_FORMAT = 8  # bump per invalidare la cache su disco quando cambia lo schema
+CACHE_FORMAT = 9  # bump per invalidare la cache su disco quando cambia lo schema
 
 # --------------------------------------------------------------------------- #
 # Console
@@ -230,6 +231,65 @@ def cost_of(model: str, tok: dict, pricing: dict) -> tuple[float, bool]:
 
 
 TOKEN_FIELDS = ("input", "output", "cache_read", "cache_w5m", "cache_w1h", "web_search", "web_fetch")
+
+# Finestra di contesto standard dei modelli Claude. Serve a riconoscere le
+# richieste che NON possono esserci passate dentro.
+FINESTRA_STANDARD = 200_000
+
+
+def contesto_di(tok: dict) -> int:
+    """Quanti token sono entrati nel modello per questa richiesta.
+
+    Tutto quello che ha attraversato la finestra: il prompt nuovo, quello
+    riletto dalla cache e quello appena scritto in cache. L'output non c'entra,
+    perche' esce.
+    """
+    return (tok.get("input", 0) + tok.get("cache_read", 0)
+            + tok.get("cache_w5m", 0) + tok.get("cache_w1h", 0))
+
+
+def finestra_standard(pricing: dict) -> int:
+    return int((pricing or {}).get("finestra_standard") or FINESTRA_STANDARD)
+
+
+def sovrapprezzo_contesto(sess: dict, pricing: dict) -> dict:
+    """Cosa costerebbe in piu' il lavoro fatto oltre la finestra standard.
+
+    Il transcript registra l'id del modello **senza** il suffisso della finestra
+    estesa (`claude-opus-5`, non `claude-opus-5[1m]`), quindi a posteriori i due
+    non si distinguono per nome. Si distinguono pero' per i numeri: una richiesta
+    che ha fatto entrare piu' token di quanti la finestra standard ne contenga
+    non puo' esserci passata dentro, e su quella non c'e' niente da dedurre.
+
+    Il maggiorato NON viene sommato ai costi: si mostra a parte. Il rapporto e'
+    configurazione (`long_context`) perche' i listini cambiano, e un numero
+    inventato in una colonna di costi diventa vero appena qualcuno lo legge.
+    """
+    dati = sess.get("oltre_finestra") or {}
+    n = dati.get("richieste") or 0
+    if not n:
+        return {"richieste": 0, "token": 0, "extra": 0.0, "dichiarato": False}
+    conf = (pricing or {}).get("long_context") or {}
+    m_in = float(conf.get("in") or 0) or None
+    m_out = float(conf.get("out") or 0) or None
+    token = extra = 0.0
+    for model, tok in (dati.get("models") or {}).items():
+        token += contesto_di(tok) + tok.get("output", 0)
+        if not (m_in and m_out):
+            continue
+        # I due rincari sono voci diverse del listino: quello che entra e
+        # quello che esce. Le chiamate agli strumenti non c'entrano — si pagano
+        # a richiesta, non a token — e restano fuori da entrambi i conti.
+        senza_web = {k: v for k, v in tok.items()
+                     if k not in ("web_search", "web_fetch")}
+        entra = dict(senza_web, output=0)
+        esce = {k: (v if k == "output" else 0) for k, v in senza_web.items()}
+        base = cost_of(model, entra, pricing)[0] + cost_of(model, esce, pricing)[0]
+        maggiorato = (cost_of(model, entra, pricing)[0] * m_in
+                      + cost_of(model, esce, pricing)[0] * m_out)
+        extra += max(0.0, maggiorato - base)
+    return {"richieste": n, "token": int(token), "extra": extra,
+            "dichiarato": bool(m_in and m_out)}
 
 
 # --------------------------------------------------------------------------- #
@@ -902,8 +962,17 @@ class TranscriptParser:
         models: dict[str, dict] = {}
         by_month: dict[str, dict] = {}
         messages = list(self.prompts) if self.keep_messages else []
+        # Richieste che nella finestra standard non ci sarebbero entrate: sono
+        # la sola traccia rimasta dei modelli a contesto esteso, che nel
+        # transcript si chiamano come gli altri.
+        soglia = finestra_standard(self.pricing)
+        oltre: dict[str, dict] = {}
+        n_oltre = 0
         for entry in self.dedup.values():
             add_tok(models.setdefault(entry["model"], new_tok()), entry["tok"])
+            if soglia and contesto_di(entry["tok"]) > soglia:
+                n_oltre += 1
+                add_tok(oltre.setdefault(entry["model"], new_tok()), entry["tok"])
             # una sessione può attraversare più mesi: il costo va attribuito al mese
             # del singolo messaggio, non a quello di inizio sessione
             month = entry.get("month") or "?"
@@ -939,6 +1008,7 @@ class TranscriptParser:
             "is_subagent": self.is_subagent,
             "models": models,
             "by_month": by_month,
+            "oltre_finestra": {"richieste": n_oltre, "models": oltre},
             "user_prompts": self.user_prompts,
             "subagent_prompts": self.subagent_prompts,
             "assistant_msgs": len(self.dedup),
@@ -1027,6 +1097,51 @@ def archivio_of(config: dict) -> dict:
     return {"testo": bool(a.get("testo", False))}
 
 
+def copilot_of(config: dict) -> dict:
+    """Opzioni della sorgente Copilot.
+
+    Acceso di default: leggere le chat di Copilot e' lo stesso gesto che
+    leggere i transcript di Claude Code — file gia' sul disco, della stessa
+    persona, sulla stessa macchina. Chi non vuole vederle lo spegne.
+    """
+    c = config.get("copilot") or {}
+    return {"enabled": bool(c.get("enabled", True))}
+
+
+def costo_txt(riga: dict) -> str:
+    """Il costo, oppure un trattino dove non e' misurabile.
+
+    Copilot si paga a quota fissa e non dichiara i token: un «se fosse API»
+    calcolato li' sarebbe un numero inventato, e verrebbe letto come una spesa.
+    Il trattino dice la sola cosa vera, cioe' che non si sa.
+    """
+    if riga.get("costo_noto") is False:
+        return "—" if UNI else "-"
+    return h_cost(riga.get("cost") or 0.0)
+
+
+def tok_txt(riga: dict, n) -> str:
+    """Un conteggio di token, o «—» dove la sorgente non li dichiara.
+
+    Zero sarebbe un'altra affermazione: vorrebbe dire che quel turno non ha
+    consumato niente, che e' falso.
+    """
+    if riga.get("costo_noto") is False:
+        return "—" if UNI else "-"
+    return h_tokens(n)
+
+
+def fonte_di(riga: dict) -> str:
+    return riga.get("fonte") or "claude-code"
+
+
+ETICHETTA_FONTE = {"claude-code": "Claude Code", "copilot": "Copilot"}
+
+
+def fonti_presenti(sessions: list[dict]) -> list[str]:
+    return sorted({fonte_di(s) for s in sessions})
+
+
 def apri_archivio_lettura():
     """L'archivio in sola lettura, per chi vuole solo guardarci dentro.
 
@@ -1107,6 +1222,7 @@ def new_session(session_id: str) -> dict:
         "bad_lines": 0,
         "agents": {},
         "subagent_files": 0,
+        "oltre_finestra": {"richieste": 0, "models": {}},
         "ts": [],
         "turns": [],
         "sub_turns": [],
@@ -1121,6 +1237,12 @@ def new_session(session_id: str) -> dict:
 def merge_record(sess: dict, rec: dict, mtime: float) -> None:
     for model, tok in (rec.get("models") or {}).items():
         add_tok(sess["models"].setdefault(model, new_tok()), tok)
+    oltre = rec.get("oltre_finestra") or {}
+    if oltre.get("richieste"):
+        dove = sess.setdefault("oltre_finestra", {"richieste": 0, "models": {}})
+        dove["richieste"] += oltre["richieste"]
+        for model, tok in (oltre.get("models") or {}).items():
+            add_tok(dove["models"].setdefault(model, new_tok()), tok)
     for month, models in (rec.get("by_month") or {}).items():
         slot = sess["by_month"].setdefault(month, {})
         for model, tok in models.items():
@@ -1261,6 +1383,7 @@ def finalize(sess: dict, pricing: dict, idle_gap: float) -> dict:
     sess["cost"] = cost
     sess["per_model"] = per_model
     sess["unknown_models"] = sorted(unknown)
+    sess["contesto_esteso"] = sovrapprezzo_contesto(sess, pricing)
 
     per_month = {}
     for month, models in (sess.get("by_month") or {}).items():
@@ -1395,13 +1518,37 @@ def collect(base: str, pricing: dict, use_cache: bool, idle_gap: float,
                         [t["ts"] for t in s["traces"] if t["ts"] is not None])
             arch.pota(base, vivi)
             arch.scrivi_sessioni(out)
-            # Sessioni di cui non resta un solo transcript: senza questo passaggio
-            # sparirebbero dai conti il giorno in cui Claude Code fa le pulizie.
-            orfane = [o for o in arch.sessioni_orfane({s["session_id"] for s in out})
+
+        # Copilot: fonte separata, letta dallo storage di VS Code. Non passa da
+        # `pota`, che ragiona sui transcript, e le sue righe sono acquisite per
+        # definizione — quel formato non e' documentato e domani puo' cambiare.
+        if copilot_of(pricing)["enabled"]:
+            copilot = [s for s in cm_copilot.sessioni(keep_messages=tieni_testo)
+                       if sessione_nel_progetto(s, project)]
+            if copilot:
+                if arch:
+                    arch.scrivi_sessioni(copilot, fonte=cm_copilot.FONTE)
+                    if tieni_testo:
+                        for s in copilot:
+                            arch.scrivi_messaggi(
+                                s["session_id"], s.get("messaggi") or [],
+                                [t["ts"] for t in s["traces"] if t["ts"] is not None])
+                for s in copilot:
+                    s.pop("messaggi", None)
+                out.extend(copilot)
+
+        if arch:
+            # Sessioni di cui non resta piu' la fonte: senza questo passaggio
+            # sparirebbero dai conti il giorno in cui Claude Code fa le pulizie,
+            # o VS Code le sue.
+            attive = {"claude-code"}
+            if copilot_of(pricing)["enabled"]:
+                attive.add(cm_copilot.FONTE)
+            orfane = [o for o in arch.sessioni_orfane(
+                          {s["session_id"] for s in out}, fonti=attive)
                       if sessione_nel_progetto(o, project)]
-            if orfane:
-                out.extend(orfane)
-                out.sort(key=lambda s: s["end"] or 0, reverse=True)
+            out.extend(orfane)
+        out.sort(key=lambda s: s["end"] or 0, reverse=True)
     finally:
         if arch:
             try:
@@ -1622,11 +1769,11 @@ def view_summary(sessions: list[dict], pricing: dict, args) -> None:
             h_dur(s["active"]),
             f"{s['user_prompts']}/{s['assistant_msgs']}",
             s["tool_calls"],
-            h_tokens(t["input"]),
-            h_tokens(t["output"]),
-            h_tokens(t["cache_w5m"] + t["cache_w1h"]),
-            h_tokens(t["cache_read"]),
-            h_cost(s["cost"]),
+            tok_txt(s, t["input"]),
+            tok_txt(s, t["output"]),
+            tok_txt(s, t["cache_w5m"] + t["cache_w1h"]),
+            tok_txt(s, t["cache_read"]),
+            costo_txt(s),
         ]
         if sub:
             row.append(share_pct(s["cost"], tot_cost))
@@ -1652,6 +1799,8 @@ def view_summary(sessions: list[dict], pricing: dict, args) -> None:
     print()
     print_table(headers, rows, aligns, styles={len(rows) - 1: (C.BOLD,)})
     print_trace_summary(shown)
+    print_fonti_note(shown)
+    print_contesto_esteso(shown, pricing)
     print_cost_legend(pricing, shown)
 
     if not args.no_breakdown:
@@ -1704,6 +1853,52 @@ def print_trace_summary(sessions: list[dict]) -> None:
         parts.append(f"{C.w('interrotti', C.DIM)} {st['interrupted']}")
     print()
     print("  " + f"   {BULLET}   ".join(parts))
+
+
+def print_fonti_note(sessions: list[dict]) -> None:
+    """Spiega i trattini, quando ce ne sono.
+
+    Un «—» in una colonna di costi si legge come uno zero se nessuno dice il
+    contrario. Qui il contrario e' che quella sorgente i token non li dichiara.
+    """
+    muti = [s for s in sessions if s.get("costo_noto") is False]
+    if not muti:
+        return
+    fonti = sorted({fonte_di(s) for s in muti})
+    nomi = ", ".join(ETICHETTA_FONTE.get(f, f) for f in fonti)
+    turni = sum(s.get("traces_n", 0) for s in muti)
+    print()
+    print(C.w(f"  {len(muti)} sessioni da {nomi} ({turni} turni): ci sono turni, "
+              f"tempi e strumenti.", C.DIM))
+    print(C.w("  Token e costo no — si paga a quota fissa e non vengono "
+              "dichiarati. «—» vuol dire non misurabile, non zero.", C.DIM))
+
+
+def print_contesto_esteso(sessions: list[dict], pricing: dict) -> None:
+    """Il consumo che la finestra standard non avrebbe potuto contenere.
+
+    E' un limite noto messo in chiaro invece che una stima messa nei totali:
+    quel lavoro e' stato pagato di piu' di quanto dica la colonna del costo, e
+    fin qui non lo diceva niente.
+    """
+    n = sum((s.get("contesto_esteso") or {}).get("richieste", 0) for s in sessions)
+    if not n:
+        return
+    token = sum((s.get("contesto_esteso") or {}).get("token", 0) for s in sessions)
+    extra = sum((s.get("contesto_esteso") or {}).get("extra", 0.0) for s in sessions)
+    soglia = finestra_standard(pricing)
+    print()
+    print(C.w(f"  {n} richieste hanno superato i {soglia // 1000}k token di "
+              f"contesto ({h_tokens(token)} in tutto):", C.DIM))
+    print(C.w("  sono girate su un modello a finestra estesa, che il transcript "
+              "non distingue per nome", C.DIM))
+    print(C.w("  ma che si paga a listino maggiorato.", C.DIM))
+    if extra:
+        print(C.w(f"  Col rapporto dichiarato in long_context sarebbero "
+                  f"{h_cost(extra)} in piu', non compresi nei totali.", C.DIM))
+    else:
+        print(C.w("  Quanto in piu' non e' calcolato: dichiara il rapporto in "
+                  "long_context (config.json).", C.DIM))
 
 
 def print_model_breakdown(sessions: list[dict], pricing: dict) -> None:
@@ -1916,17 +2111,21 @@ def flatten_traces(sessions: list[dict], search: str = "",
     prompt, sui nomi degli strumenti, sul progetto e sull'identificativo di
     sessione — quello che si ha sempre sottomano, senza rileggere niente.
 
-    `anche` e' l'insieme delle coppie (sessione, turno) trovate cercando nel
-    testo archiviato: turni che il filtro qui sopra scarterebbe perche' la
-    parola non sta nel prompt ma in una risposta.
+    `anche` sono i turni trovati cercando nel testo archiviato: turni che il
+    filtro qui sopra scarterebbe perche' la parola non sta nel prompt ma in una
+    risposta. E' una mappa (sessione, turno) -> frammento, ma va bene anche un
+    insieme di sole coppie: quello che serve qui e' l'appartenenza, il frammento
+    e' un di piu' che si mostra se c'e'.
     """
     needle = (search or "").strip().lower()
-    anche = anche or set()
+    anche = anche or {}
+    trovati = anche if isinstance(anche, dict) else {}
     out = []
     for s in sessions:
         for tr in s.get("traces") or []:
+            chiave = (s.get("session_id"), tr.get("n"))
             if needle:
-                if (s.get("session_id"), tr.get("n")) not in anche:
+                if chiave not in anche:
                     blob = " ".join(filter(None, [
                         tr.get("prompt") or "", " ".join(tr.get("tool_names") or []),
                         s.get("project") or "", s.get("session_id") or "",
@@ -1938,30 +2137,128 @@ def flatten_traces(sessions: list[dict], search: str = "",
             row["project"] = s.get("project")
             row["title"] = s.get("title")
             row["archiviata"] = bool(s.get("archiviata"))
+            hit = trovati.get(chiave) or {}
+            row["frammento"] = hit.get("frammento") or None
+            row["frammento_ruolo"] = hit.get("ruolo") or None
             out.append(row)
     out.sort(key=lambda r: (r["ts"] is None, -(r["ts"] or 0)))
     return out
 
 
-def cerca_nel_testo(needle: str) -> set:
-    """Coppie (sessione, turno) in cui il testo archiviato contiene `needle`.
+def cerca_nel_testo(needle: str) -> dict:
+    """Turni in cui il testo archiviato contiene `needle`, con il frammento.
 
-    Insieme vuoto se il testo non e' archiviato: non e' un errore, e' la
-    configurazione predefinita.
+    Chiave (sessione, turno), valore il pezzo di testo attorno alla parola: e'
+    la differenza fra una ricerca che restringe un elenco e una che dice dove ha
+    trovato. Dizionario vuoto se il testo non e' archiviato: non e' un errore,
+    e' la configurazione predefinita.
     """
     needle = (needle or "").strip()
     # Sotto le tre lettere non si cerca: l'indice risponderebbe mezza storia, e
     # ogni tasto premuto costerebbe un'apertura dell'archivio per niente.
     if len(needle) < 3:
-        return set()
+        return {}
     arch = apri_archivio_lettura()
     if arch is None:
-        return set()
+        return {}
     try:
-        return {(r["session_id"], r["turno"]) for r in arch.cerca(needle)
-                if r.get("turno") is not None}
+        trovati: dict = {}
+        for r in arch.cerca(needle):
+            if r.get("turno") is None:
+                continue
+            chiave = (r["session_id"], r["turno"])
+            # Le righe arrivano ordinate per pertinenza: di un turno con piu'
+            # messaggi che contengono la parola, il primo e' quello da mostrare.
+            if chiave not in trovati:
+                trovati[chiave] = {"frammento": r.get("frammento") or "",
+                                   "ruolo": r.get("ruolo")}
+        return trovati
     finally:
         arch.chiudi()
+
+
+def h_byte(n: float) -> str:
+    """Byte come si leggono, senza decimali inutili sui numeri piccoli."""
+    for unita, soglia in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
+        if n >= soglia:
+            return f"{n / soglia:.1f} {unita}".replace(".0 ", " ")
+    return f"{int(n)} byte"
+
+
+def view_archivio() -> int:
+    """Com'e' messo l'archivio: quanto pesa, da cosa, e cosa si puo' fare.
+
+    E' la scheda di manutenzione: senza sapere cos'e' che occupa spazio, le
+    uniche mosse possibili sono cancellare tutto o non toccare niente.
+    """
+    path = cm_archivio.db_path()
+    if not os.path.isfile(path):
+        info("nessun archivio: verra' creato alla prima scansione.")
+        return 0
+    try:
+        with cm_archivio.Archivio(path, CACHE_FORMAT, sola_lettura=True) as arch:
+            c, p = arch.conta(), arch.peso()
+    except Exception as exc:
+        warn(f"archivio non apribile: {exc}")
+        return 2
+
+    print()
+    print(C.w(f"  Archivio  {path}", C.BOLD))
+    print()
+    print(f"  {h_byte(p['file']):>10}  in tutto")
+    for nome, byte in sorted(p["parti"].items(), key=lambda kv: -kv[1]):
+        quota = 100 * byte / p["file"] if p["file"] else 0
+        print(f"  {h_byte(byte):>10}  {nome:<20} {quota:4.0f}%")
+    print(C.w("  Le voci si contano sui dati e non sulle pagine: la loro somma "
+              "sta sotto il totale,\n  che comprende indici e spazio libero.", C.DIM))
+    if p.get("chiaro"):
+        print(C.w(f"  La cache di analisi e' compressa: in chiaro sarebbe "
+                  f"{h_byte(p['chiaro'])}, di cui {h_byte(p['timestamp'])} di soli\n"
+                  "  timestamp — che restano tutti, ed e' quello che permette di "
+                  "cambiare --idle-gap\n  senza rileggere i transcript.", C.DIM))
+    print()
+    print(f"  {c['sessioni']} sessioni, {c['turni']} turni, "
+          f"{c['file']} transcript in cache"
+          + (f", {c['messaggi']} messaggi di testo" if c["messaggi"] else "")
+          + ".")
+    if c["acquisite"]:
+        print(C.w(f"  {c['acquisite']} sessioni non hanno piu' il transcript: "
+                  "sono l'unica copia rimasta di quel lavoro.", C.DIM))
+    print()
+    print(C.w("  --clear-cache      svuota la cache di analisi: i transcript "
+              "vengono riletti, le sessioni restano", C.DIM))
+    print(C.w("  --dimentica-testo  cancella il testo delle conversazioni e "
+              "compatta il file; i numeri restano", C.DIM))
+    return 0
+
+
+def print_frammenti(righe: list[dict], needle: str, quanti: int = 12) -> None:
+    """Dove compare la parola cercata, quando non e' nel prompt.
+
+    Il prompt sta gia' nella tabella: qui finisce solo quello che la tabella non
+    fa vedere, cioe' il testo delle risposte. Senza, cercare una parola dice
+    quanti turni la contengono ma non dove — che e' meta' risposta.
+    """
+    con_testo = [r for r in righe if r.get("frammento")]
+    if not (needle and con_testo):
+        return
+    ap, ch = ("«", "»") if UNI else ('"', '"')
+    print()
+    print(C.w(f"  Dove compare {ap}{needle}{ch}"
+              f"  ({len(con_testo)} nel testo archiviato)", C.BOLD))
+    for r in con_testo[:quanti]:
+        # «tu» / «risposta» e non «claude»: il testo archiviato arriva anche da
+        # sorgenti che Claude non l'hanno mai visto.
+        chi = "tu" if r.get("frammento_ruolo") == "tu" else "risposta"
+        frammento = r["frammento"]
+        if not UNI:
+            frammento = frammento.replace("«", "[").replace("»", "]").replace("…", "...")
+        turno = f"#{r.get('n')}"
+        print("    " + C.w(h_time(r["ts"]), C.DIM)
+              + f"  {(r['session_id'] or '')[:8]} {turno:<5}"
+              + C.w(f"{chi:<9}", C.DIM) + trunc(frammento, 92))
+    if len(con_testo) > quanti:
+        print(C.w(f"    {'…' if UNI else '...'} e altri {len(con_testo) - quanti}", C.DIM))
 
 
 def view_traces(sessions: list[dict], pricing: dict, args) -> None:
@@ -1993,9 +2290,11 @@ def view_traces(sessions: list[dict], pricing: dict, args) -> None:
             h_dur(tr["duration"]),
             tr["requests"], tr["tools"],
             h_pct(tr["cache_hit"]),
-            h_tokens(sum(tr["tokens"][k] for k in
-                         ("input", "output", "cache_read", "cache_w5m", "cache_w1h"))),
-            h_cost(tr["cost"]),
+            # Una sorgente che non dichiara i token lascia il dizionario vuoto:
+            # zero e' la somma giusta, e la colonna del costo dice gia' «—».
+            tok_txt(tr, sum(tr["tokens"].get(k, 0) for k in
+                            ("input", "output", "cache_read", "cache_w5m", "cache_w1h"))),
+            costo_txt(tr),
             trunc(label, 20),
             trunc(prompt, 52),
         ])
@@ -2005,6 +2304,7 @@ def view_traces(sessions: list[dict], pricing: dict, args) -> None:
         ["INIZIO", "PROGETTO", "SESSIONE", "DURATA", "REQ", "TOOL", "CACHE",
          "TOKEN", "COSTO", "MODELLO", "PROMPT"],
         rows, ["<", "<", "<", ">", ">", ">", ">", ">", ">", "<", "<"], styles)
+    print_frammenti(shown, needle)
     print()
     st = trace_stats(sessions)
     print(C.w(f"  {st['traces']} turni in {len(sessions)} sessioni  {BULLET}  "
@@ -2014,6 +2314,7 @@ def view_traces(sessions: list[dict], pricing: dict, args) -> None:
         print(C.w(f"  {'⨯' if UNI else '!'} = turno interrotto dall'utente "
                   f"({st['interrupted']} in tutto): la risposta in corso non andava bene.",
                   C.DIM))
+    print_fonti_note(sessions)
     if any(t.get("archiviata") for t in shown):
         print(C.w(f"  {'▪' if UNI else '='} = dall'archivio: il transcript non c'e' piu'.",
                   C.DIM))
@@ -2431,6 +2732,69 @@ def conversation_filename(sess: dict) -> str:
     return f"{when} {title} [{(sess.get('session_id') or '')[:8]}].md"
 
 
+def export_turni_jsonl(righe: list[dict], path: str) -> dict:
+    """I turni selezionati, uno per riga, in JSONL.
+
+    **A cosa serve** — la domanda che questo export si portava dietro da mesi.
+    Un turno e' gia' una coppia domanda/risposta con accanto il costo, la
+    durata, gli strumenti usati e se e' stato interrotto: e' il formato in cui
+    si valuta un prompt o si confronta un modello. Il criterio di selezione non
+    e' una nuova invenzione, e' **il filtro che si ha davanti** — cercare
+    «riconciliazione», o restringere a una sessione, e poi esportare quello.
+
+    Le risposte vengono dall'archivio del testo. Senza (`archivio.testo`
+    spento) escono `null`, e il conto dei turni senza risposta lo dice: un
+    dataset di valutazione con meta' delle risposte vuote e' peggio di nessun
+    dataset, e non deve sembrare completo.
+    """
+    arch = apri_archivio_lettura()
+    testi: dict[tuple, list] = {}
+    if arch is not None:
+        try:
+            for sid in {r.get("session_id") for r in righe if r.get("session_id")}:
+                for m in arch.messaggi_di(sid):
+                    testi.setdefault((sid, m.get("turno")), []).append(m)
+        finally:
+            arch.chiudi()
+
+    scritti = senza_risposta = 0
+    with open(path, "w", encoding="utf-8") as fh:
+        for r in righe:
+            chiave = (r.get("session_id"), r.get("n"))
+            msg = sorted(testi.get(chiave) or [],
+                         key=lambda m: (m.get("ts") is None, m.get("ts") or 0))
+            domande = [m["text"] for m in msg if m.get("kind") == "prompt"]
+            risposte = [m["text"] for m in msg if m.get("kind") == "assistant"]
+            if not risposte:
+                senza_risposta += 1
+            modelli = sorted(r.get("per_model") or {},
+                             key=lambda m: -(r["per_model"][m].get("cost") or 0))
+            fh.write(json.dumps({
+                "sessione": r.get("session_id"),
+                "turno": r.get("n"),
+                "quando": (dt.datetime.fromtimestamp(r["ts"], dt.timezone.utc)
+                           .isoformat() if r.get("ts") else None),
+                "progetto": r.get("project"),
+                "fonte": fonte_di(r),
+                "modelli": modelli,
+                "durata_s": r.get("duration"),
+                "richieste": r.get("requests"),
+                "strumenti": list(r.get("tool_names") or []),
+                "n_strumenti": r.get("tools"),
+                "interrotto": bool(r.get("interrupted")),
+                # Le sorgenti che i token non li dichiarano scrivono null, non
+                # zero: un dataset con degli zeri finti si allena sugli zeri.
+                "costo_usd": None if r.get("costo_noto") is False else r.get("cost"),
+                "token": None if r.get("costo_noto") is False else r.get("tokens"),
+                "cache_hit": r.get("cache_hit"),
+                "domanda": "\n\n".join(domande) or r.get("prompt"),
+                "risposta": "\n\n".join(risposte) or None,
+            }, ensure_ascii=False) + "\n")
+            scritti += 1
+    return {"turni": scritti, "senza_risposta": senza_risposta,
+            "testo_archiviato": bool(testi)}
+
+
 def export_conversations(sessions: list[dict], base: str, pricing: dict,
                          out_dir: str, idle_gap: float = 300.0,
                          include_subagents: bool = False,
@@ -2746,8 +3110,13 @@ def build_json_payload(sessions: list[dict], pricing: dict, top: int = 0,
         }
 
     for s in shown:
+        noto = s.get("costo_noto") is not False
         payload["sessions"].append({
             "session_id": s["session_id"],
+            "fonte": fonte_di(s),
+            # null, non zero: Copilot non dichiara i token, e chi legge questo
+            # JSON deve poter distinguere «non misurato» da «non consumato».
+            "costo_misurabile": noto,
             "project": s["project"],
             "project_dir": s["project_dir"],
             "cwd": s["cwd"],
@@ -2768,8 +3137,8 @@ def build_json_payload(sessions: list[dict], pricing: dict, top: int = 0,
                 "tool_results": s["tool_results"],
                 "api_errors": s["api_errors"],
             },
-            "tokens": s["tokens"],
-            "cost_usd": round(s["cost"], 6),
+            "tokens": s["tokens"] if noto else None,
+            "cost_usd": round(s["cost"], 6) if noto else None,
             "billing": s.get("billing", "subscription"),
             "real_cost": round(s.get("real_cost", 0.0), 6),
             "real_cost_by_month": {m: round(v, 6)
@@ -2906,6 +3275,12 @@ configurazione (abbonamento, listino, tema, default):
     p.add_argument("--dimentica-testo", action="store_true",
                    help="cancella dall'archivio il testo delle conversazioni ed esci; "
                         "i numeri restano")
+    p.add_argument("--archivio", action="store_true",
+                   help="quanto pesa l'archivio e da cosa, ed esci")
+    p.add_argument("--export-turni", metavar="FILE.jsonl",
+                   help="scrive in JSONL i turni selezionati (rispetta --search, "
+                        "--project e --since): un turno per riga, con domanda, "
+                        "risposta, costo ed esito")
     p.add_argument("--no-color", action="store_true", help="disabilita i colori")
     p.add_argument("--version", action="version", version=f"claude-monitor {__version__}")
     return p
@@ -2934,15 +3309,23 @@ def main(argv=None) -> int:
                  if c["acquisite"] else "") + ".")
         return 0
 
+    if args.archivio:
+        return view_archivio()
+
     if args.dimentica_testo:
         try:
             with cm_archivio.Archivio(cm_archivio.db_path(), CACHE_FORMAT) as arch:
                 n = arch.dimentica_testo()
+                # Senza VACUUM le pagine restano dentro il file: a chi ha appena
+                # chiesto di dimenticare qualcosa, un file grande uguale sembra
+                # — a ragione — che non sia successo niente.
+                recuperati = arch.compatta()
                 c = arch.conta()
         except Exception as exc:
             warn(f"archivio non apribile: {exc}")
             return 2
-        print(f"{n} messaggi cancellati dall'archivio.")
+        print(f"{n} messaggi cancellati dall'archivio"
+              + (f", {h_byte(recuperati)} restituiti al disco." if recuperati else "."))
         print(f"restano i numeri: {c['sessioni']} sessioni, {c['turni']} turni.")
         if c["acquisite"]:
             warn(f"{c['acquisite']} sessioni non hanno piu' il transcript: "
@@ -3000,6 +3383,20 @@ def main(argv=None) -> int:
         if result["failed"]:
             warn(f"{len(result['failed'])} sessioni non leggibili: "
                  + ", ".join(s[:8] for s in result["failed"][:5]))
+        return 0
+
+    if args.export_turni:
+        needle = getattr(args, "search", "") or ""
+        righe = flatten_traces(sessions, needle, anche=cerca_nel_testo(needle))
+        if args.top:
+            righe = righe[: args.top]
+        esito = export_turni_jsonl(righe, args.export_turni)
+        print()
+        print(C.w(f"  {esito['turni']} turni in {args.export_turni}", C.BOLD))
+        if esito["senza_risposta"]:
+            warn(f"{esito['senza_risposta']} turni senza risposta"
+                 + ("" if esito["testo_archiviato"] else
+                    ": il testo non e' archiviato (archivio.testo in config.json)"))
         return 0
 
     if args.json:

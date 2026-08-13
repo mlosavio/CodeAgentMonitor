@@ -225,11 +225,57 @@ def archivio_conteggi() -> dict:
     if arch is None:
         return {}
     try:
-        return arch.conta()
+        return dict(arch.conta(), peso=arch.peso())
     except Exception:
         return {}
     finally:
         arch.chiudi()
+
+
+def stato_archivio(conteggi: dict) -> str:
+    """Cosa c'e' dentro l'archivio e quanto pesa, in una frase.
+
+    Il peso sta accanto ai conteggi perche' e' l'unica cosa che rende
+    decidibile la manutenzione: sapere che ci sono mille sessioni non dice se
+    convenga cancellare qualcosa, sapere che occupano 4 MB si'.
+    """
+    if not conteggi:
+        return "Archivio non leggibile."
+    parti = [f"Adesso contiene {conteggi['sessioni']} sessioni e "
+             f"{conteggi['turni']} turni"]
+    if conteggi.get("acquisite"):
+        parti.append(f", di cui {conteggi['acquisite']} senza più il transcript")
+    parti.append(".")
+    if conteggi.get("messaggi"):
+        parti.append(f" Testo archiviato: {conteggi['messaggi']} messaggi.")
+    peso = conteggi.get("peso") or {}
+    if peso.get("file"):
+        voci = peso.get("parti") or {}
+        grossa = max(voci, key=voci.get) if voci else ""
+        parti.append(f" Occupa {cm.h_byte(peso['file'])}"
+                     + (f", per lo più {grossa}." if grossa else "."))
+    return "".join(parti)
+
+
+def costo(riga: dict) -> str:
+    """Il costo di una riga, o «—» dove la sorgente non lo dichiara."""
+    if riga.get("costo_noto") is False:
+        return "—"
+    return Fmt.cost(riga.get("cost") or 0.0)
+
+
+def frammento_di(riga: dict) -> str:
+    """La riga sotto il turno: dove la parola cercata e' stata trovata davvero.
+
+    Compare solo cercando, e solo con il testo archiviato: e' il pezzo di
+    conversazione che la tabella non fa vedere, perche' nelle colonne c'e' la
+    domanda e non la risposta.
+    """
+    testo = riga.get("frammento")
+    if not testo:
+        return ""
+    chi = "tu" if riga.get("frammento_ruolo") == "tu" else "risposta"
+    return f"{chi}:  {testo}"
 
 
 def pct_txt(value: float | None) -> str:
@@ -615,7 +661,8 @@ class DataTable(tk.Frame):
     intestazioni ordinabili e una colonna con la barra di quota.
     """
 
-    def __init__(self, master, theme: Theme, columns, on_activate=None, share_key=None):
+    def __init__(self, master, theme: Theme, columns, on_activate=None, share_key=None,
+                 sub=None):
         super().__init__(master, bg=theme["surface"], highlightthickness=1,
                          highlightbackground=theme["border"],
                          highlightcolor=theme["border"])
@@ -623,6 +670,13 @@ class DataTable(tk.Frame):
         self.columns = columns
         self.on_activate = on_activate
         self.share_key = share_key        # funzione riga -> valore per la barra
+        # Seconda riga sotto quella principale, quando c'e' qualcosa da dire che
+        # non sta in una cella: oggi i frammenti di ricerca. Le righe restano
+        # tutte della stessa altezza — variabile fra tabelle, uniforme dentro una
+        # — perche' meta' del disegno e tutta la selezione contano in righe.
+        self.sub = sub                    # funzione riga -> testo, o None
+        self.sub_on = False
+        self.sub_h = theme.f_small.metrics("linespace") + 8
         self.rows: list[dict] = []
         self.total_row = None
         self.sort_col = None
@@ -632,7 +686,8 @@ class DataTable(tk.Frame):
         self.placeholder = None
         self.help: dict[str, str] = {}   # cid -> spiegazione al passaggio del mouse
 
-        self.row_h = max(30, theme.f_body.metrics("linespace") + 16)
+        self.row_h_base = max(30, theme.f_body.metrics("linespace") + 16)
+        self.row_h = self.row_h_base
         self.head_h = 34
         self.pad = 16
 
@@ -669,6 +724,8 @@ class DataTable(tk.Frame):
         self.total_row = total_row
         self.placeholder = None
         self.sel_index = -1
+        self.sub_on = bool(self.sub) and any(self.sub(r) for r in rows)
+        self.row_h = self.row_h_base + (self.sub_h if self.sub_on else 0)
         self._redraw()
 
     def set_placeholder(self, text):
@@ -804,7 +861,12 @@ class DataTable(tk.Frame):
 
     def _draw_row(self, c, row, xs, y, share_max, width):
         t = self.t
-        mid = y + self.row_h / 2
+        sotto = self.sub(row) if self.sub_on else None
+        mid = y + (self.row_h - (self.sub_h if self.sub_on else 0)) / 2
+        if sotto:
+            c.create_text(self.pad, y + self.row_h - self.sub_h / 2 - 2,
+                          text=self._clip(sotto, width - self.pad * 2 - 12, t.f_small),
+                          anchor="w", fill=t["muted"], font=t.f_small)
         for cid, _label, _w, align, _key, fmt in self.columns:
             x, w = xs[cid]
             if cid == "share":
@@ -1072,10 +1134,12 @@ PROJECT_COLUMNS = [
 
 SESSION_COLUMNS = [
     ("project",  "Progetto", 140, "w", lambda r: (r["project"] or "").lower(), lambda r: r["project"]),
-    ("title",    "Titolo",   260, "w", lambda r: (r["title"] or r["first_prompt"] or "").lower(),
+    ("title",    "Titolo",   240, "w", lambda r: (r["title"] or r["first_prompt"] or "").lower(),
      lambda r: (("▪ " if r.get("archiviata") else "")
                 + (r["title"] or r["first_prompt"] or "—"))),
-    ("cost",     "Se fosse API", 105, "e", lambda r: r["cost"], lambda r: Fmt.cost(r["cost"])),
+    ("fonte",    "Fonte",     90, "w", lambda r: cm.fonte_di(r),
+     lambda r: cm.ETICHETTA_FONTE.get(cm.fonte_di(r), cm.fonte_di(r))),
+    ("cost",     "Se fosse API", 105, "e", lambda r: r["cost"], lambda r: costo(r)),
     ("share",    "Quota del consumo", 150, "e", lambda r: r["cost"], lambda r: ""),
     ("start",    "Inizio",    95, "e", lambda r: r["start"] or 0, lambda r: Fmt.time(r["start"])),
     ("active",   "Attivo",    80, "e", lambda r: r["active"],   lambda r: Fmt.dur(r["active"])),
@@ -1094,11 +1158,13 @@ TRACE_COLUMNS = [
      lambda r: (("⨯ " if r["interrupted"] else "")
                 + ("▪ " if r.get("archiviata") else "")
                 + (r["prompt"] or "(prima del primo prompt)"))),
-    ("project",  "Progetto",  120, "w", lambda r: (r["project"] or "").lower(),
+    ("project",  "Progetto",  115, "w", lambda r: (r["project"] or "").lower(),
      lambda r: r["project"]),
+    ("fonte",    "Fonte",      85, "w", lambda r: cm.fonte_di(r),
+     lambda r: cm.ETICHETTA_FONTE.get(cm.fonte_di(r), cm.fonte_di(r))),
     ("cost",     "Se fosse API", 105, "e", lambda r: r["cost"],
-     lambda r: Fmt.cost(r["cost"])),
-    ("share",    "Quota del consumo", 140, "e", lambda r: r["cost"], lambda r: ""),
+     lambda r: costo(r)),
+    ("share",    "Quota del consumo", 130, "e", lambda r: r["cost"], lambda r: ""),
     ("dur",      "Durata",     75, "e", lambda r: r["duration"] or 0,
      lambda r: Fmt.dur(r["duration"])),
     ("cache",    "Cache",      65, "e", lambda r: r["cache_hit"] or 0,
@@ -1126,8 +1192,10 @@ MONTH_COLUMNS = [
 # transcript locali (che contengono solo il proprio lavoro) ma l'archivio del
 # raccoglitore, alimentato dalla telemetria nativa di tutte le macchine.
 TEAM_COLUMNS = [
+    # Il triangolo davanti al nome e' l'unica cosa che, in questa tabella, non
+    # e' una misura ma un problema: le due fonti dicono cose che non combaciano.
     ("person",   "Postazione", 160, "w", lambda r: str(r["person"]).lower(),
-     lambda r: r["person"]),
+     lambda r: ("⚠ " if r.get("anomalia") else "") + str(r["person"])),
     ("paid",     "Hai pagato", 100, "e", lambda r: r.get("paid", 0),
      lambda r: r.get("paid_txt", "—")),
     ("billed",   "Fatturato",   95, "e", lambda r: r.get("billed") or 0,
@@ -1152,6 +1220,15 @@ TEAM_COLUMNS = [
     ("last",     "Ultima",      75, "e", lambda r: r["last"],
      lambda r: Fmt.ago(r["last"])),
 ]
+
+
+# Come si chiamano a schermo i due casi anomali. I nomi tecnici stanno in
+# cm_collector.ANOMALIE; qui c'e' la frase che si legge nel pannello.
+# Corte apposta: stanno su una riga gia' piena, accanto al resto del riepilogo.
+ANOMALIE_TXT = {
+    "non_in_fattura":  "fuori fattura",
+    "fatturata_ferma": "ferme ma fatturate",
+}
 
 
 def team_db_candidates(config: dict) -> list[str]:
@@ -1189,14 +1266,14 @@ def team_money(value: float, currency: str) -> str:
 def load_team_rows(config: dict, since: float | None = None):
     """Righe per postazione dall'archivio del raccoglitore.
 
-    Restituisce (righe, livello_riservatezza, nota, riepilogo). La nota spiega
-    perche' non c'e' nulla, quando non c'e' nulla: senza, una scheda vuota
-    sembra un guasto.
+    Restituisce (righe, livello_riservatezza, nota, riepilogo, adozione). La
+    nota spiega perche' non c'e' nulla, quando non c'e' nulla: senza, una scheda
+    vuota sembra un guasto.
     """
     try:
         import cm_collector
     except ImportError:
-        return [], None, "cm_collector.py non trovato accanto al pannello", {}
+        return [], None, "cm_collector.py non trovato accanto al pannello", {}, []
 
     for path in team_db_candidates(config):
         if not os.path.isfile(path):
@@ -1205,12 +1282,15 @@ def load_team_rows(config: dict, since: float | None = None):
             store = cm_collector.Store(path)          # sola lettura
             righe = cm_collector.team_rows(store, since)
             mesi = cm_collector.observed_months(store, since)[0]
+            # L'andamento dell'adozione esce dalla stessa apertura: e' una sola
+            # lettura in piu' sulla tabella delle sessioni.
+            adozione = cm_stat.adozione_team(store.con, "mese")
             store.con.close()
         except Exception as exc:                      # archivio illeggibile
-            return [], None, f"archivio non leggibile: {exc}", {}
+            return [], None, f"archivio non leggibile: {exc}", {}, []
         if not righe:
             return [], store.level, ("archivio presente ma ancora vuoto — "
-                                     "il raccoglitore non ha ricevuto dati"), {}
+                                     "il raccoglitore non ha ricevuto dati"), {}, []
 
         team = config.get("team") or {}
         righe, riepilogo = cm_collector.team_costs(
@@ -1221,10 +1301,10 @@ def load_team_rows(config: dict, since: float | None = None):
             r["ratio_txt"] = fmt_ratio(r["ratio"])
             r["billed_txt"] = (team_money(r["billed"], valuta)
                                if r.get("billed") is not None else "—")
-        return righe, store.level, "", riepilogo
+        return righe, store.level, "", riepilogo, adozione
 
     return [], None, ("nessun archivio di team: avvia il raccoglitore con "
-                      "python cm_collector.py"), {}
+                      "python cm_collector.py"), {}, []
 
 
 # Spiegazioni al passaggio del mouse sull'intestazione.
@@ -1780,6 +1860,8 @@ class TrendChart(tk.Frame):
         self.t = theme
         self.punti: list[dict] = []
         self.metrica = cm_stat.METRICHE[0]
+        self.riferimento = None       # (valore, etichetta): una riga di confronto
+        self.dettaglio = None         # riga in piu' nel tooltip
         self.hover = -1
         self._geo = None
 
@@ -1801,9 +1883,14 @@ class TrendChart(tk.Frame):
         self.canvas.bind("<Leave>", lambda _e: self._set_hover(-1))
         self.tip = Tooltip(self, theme)
 
-    def set_data(self, punti, metrica):
+    def set_data(self, punti, metrica, riferimento=None, dettaglio=None):
+        """`riferimento` e' una riga orizzontale (valore, etichetta) contro cui
+        leggere la serie: il numero pagato sotto il numero usato, per esempio.
+        `dettaglio` e' la seconda riga del tooltip, che cambia con la serie."""
         self.punti = list(punti or [])
         self.metrica = metrica
+        self.riferimento = riferimento
+        self.dettaglio = dettaglio
         self.l_title.config(text=metrica["label"])
         self.l_nota.config(text=metrica["nota"])
         self.hover = -1
@@ -1830,7 +1917,9 @@ class TrendChart(tk.Frame):
             return
 
         parte_da_zero = self.metrica.get("zero", True)
-        vmax = max(reali)
+        # La riga di confronto entra nella scala: se restasse fuori il grafico
+        # mostrerebbe la serie senza la sola cosa contro cui va letta.
+        vmax = max(reali + ([self.riferimento[0]] if self.riferimento else []))
         vmin = 0.0 if parte_da_zero else min(reali)
         if vmax == vmin:
             vmax = vmin + (abs(vmin) or 1) * 0.1
@@ -1868,6 +1957,17 @@ class TrendChart(tk.Frame):
                 continue
             c.create_text(px(i), y1 + 14, text=p["etichetta"], anchor="n",
                           fill=t["muted"], font=t.f_small)
+
+        # La riga di confronto: tratteggiata perche' non e' una misura ne' una
+        # tacca della griglia, ed etichettata perche' una riga senza nome viene
+        # letta come parte dei dati.
+        if self.riferimento:
+            valore, testo = self.riferimento
+            y = py(valore)
+            if y0 - 1 <= y <= y1 + 1:
+                c.create_line(x0, y, x1, y, fill=t["muted"], width=1, dash=(3, 3))
+                c.create_text(x1 + 6, y, text=testo, anchor="w", fill=t["muted"],
+                              font=t.f_small)
 
         colore = t["accent"]
         # Tratti separati sui periodi consecutivi che hanno un valore. Un livello
@@ -1958,10 +2058,12 @@ class TrendChart(tk.Frame):
             return
         p = self.punti[i]
         v = p.get(self.metrica["key"])
+        extra = self.dettaglio(p) if self.dettaglio else (
+            f"{p['turni']} turni · {cm.h_cost(p['costo'])} · "
+            f"{p['progetti']} progetti")
         testo = (f"{p['etichetta']}\n"
                  f"{self.metrica['label']}: {cm.fmt_stat(v, self.metrica['formato'])}\n"
-                 f"{p['turni']} turni · {cm.h_cost(p['costo'])} · "
-                 f"{p['progetti']} progetti")
+                 f"{extra}")
         self.tip.show(("trend", i), testo,
                       self.canvas.winfo_rootx() + ev.x + 16,
                       self.canvas.winfo_rooty() + ev.y + 12)
@@ -2197,6 +2299,51 @@ class TrendPanel(tk.Frame):
 
     def selected_tsv(self) -> str:
         return self.tabella.selected_tsv() if self.mostra_tabella else ""
+
+
+METRICA_ADOZIONE = {
+    "key": "postazioni", "label": "Postazioni attive per mese", "formato": "num",
+    "zero": True,
+    "nota": "Quante postazioni hanno lavorato in ciascun mese. Le postazioni "
+            "ferme non si vedono — chi non usa lo strumento non manda niente — "
+            "quindi questa riga va letta contro quelle pagate, mai da sola.",
+}
+
+
+class TeamPanel(tk.Frame):
+    """Scheda Persone: chi consuma quanto, e se il gruppo che usa lo strumento
+    sta crescendo.
+
+    Il grafico sta **sopra** la tabella, non al posto suo: la tabella dice chi,
+    il grafico dice se il numero sale, e sono due domande che si fanno insieme.
+    Compare solo da due mesi in su — con un mese solo un andamento non esiste, e
+    disegnarne uno vorrebbe dire inventarlo.
+    """
+
+    def __init__(self, master, app):
+        super().__init__(master, bg=app.t["page"])
+        self.app = app
+        self.t = app.t
+        self.chart = TrendChart(self, self.t, altezza=152)
+        self.tabella = DataTable(self, self.t, TEAM_COLUMNS,
+                                 on_activate=app.open_person,
+                                 share_key=lambda r: r["cost"])
+        self.tabella.pack(fill="both", expand=True)
+
+    def set_adozione(self, punti: list[dict], seats: int = 0) -> None:
+        if len(punti or []) < 2:
+            self.chart.pack_forget()
+            return
+        self.chart.set_data(
+            punti, METRICA_ADOZIONE,
+            riferimento=((seats, f"{seats} pagate") if seats else None),
+            dettaglio=lambda p: (f"{p['sessioni']} sessioni · "
+                                 f"{cm.h_cost(p['costo'])} a listino"))
+        if not self.chart.winfo_ismapped():
+            self.chart.pack(fill="x", side="top", pady=(0, 10), before=self.tabella)
+
+    def selected_tsv(self) -> str:
+        return self.tabella.selected_tsv()
 
 
 class SpanView(tk.Frame):
@@ -2781,14 +2928,7 @@ class SettingsWindow(tk.Toplevel):
         tk.Label(p, text=(
             "I numeri di sessioni e turni finiscono sempre in cm-local.db: servono a "
             "rileggerli senza riscansionare, e a non perderli quando Claude Code "
-            "cancella i transcript vecchi."
-            + (f"\n\nAdesso contiene {conteggi['sessioni']} sessioni e "
-               f"{conteggi['turni']} turni"
-               + (f", di cui {conteggi['acquisite']} senza più il transcript"
-                  if conteggi["acquisite"] else "")
-               + (f". Testo archiviato: {conteggi['messaggi']} messaggi."
-                  if conteggi["messaggi"] else ".")
-               if conteggi else "")),
+            "cancella i transcript vecchi.\n\n" + stato_archivio(conteggi)),
             bg=self.t["surface"], fg=self.t["ink2"], font=self.t.f_small,
             anchor="w", justify="left", wraplength=560).pack(fill="x", pady=(0, 14))
         self.t_testo = ToggleRow(p, self.t, "Archivia il testo delle conversazioni",
@@ -2800,7 +2940,8 @@ class SettingsWindow(tk.Toplevel):
             "Vuol dire tenere quel testo su disco: è una decisione, per questo è "
             "spento di default. Accendendolo, i transcript vengono riletti una volta. "
             "Per tornare indietro e cancellare quello che è stato archiviato: "
-            "python claude_monitor.py --dimentica-testo"),
+            "python claude_monitor.py --dimentica-testo — che cancella e compatta "
+            "il file. Per vedere quanto pesa e da cosa: --archivio"),
             bg=self.t["surface"], fg=self.t["muted"], font=self.t.f_small,
             anchor="w", justify="left", wraplength=560).pack(fill="x", pady=(8, 0))
 
@@ -3051,6 +3192,11 @@ class App:
         self.team_rows: list[dict] = []
         self.team_hint = ""
         self.team_summary: dict = {}
+        # Filtro sulle sole postazioni anomale, e l'ultimo carico da cui
+        # ridisegnare quando si accende: accenderlo non deve rileggere l'archivio.
+        self.team_solo_anomalie = False
+        self.team_anomalie: list[dict] = []
+        self._team_payload: tuple | None = None
         # Scheda Traces: i turni delle sessioni filtrate, con l'eventuale
         # drill-down su una sola sessione.
         self.trace_rows: list[dict] = []
@@ -3194,6 +3340,8 @@ class App:
         self.menu_export.add_command(label="Conversazioni in Markdown…",
                                      command=self.export_conversations)
         self.menu_export.add_command(label="Dati in JSON…", command=self.export_json)
+        self.menu_export.add_command(label="Turni selezionati in JSONL…",
+                                     command=self.export_turni)
         self.menu_export.add_command(label="Riepilogo del team in Markdown…",
                                      command=self.export_relazione)
         self.search = SearchBox(right, t, "cerca progetto, turno, strumento",
@@ -3238,9 +3386,12 @@ class App:
         # capisce piu' perche' si stiano vedendo solo quei turni.
         self.chip = FlatButton(bar, t, "", command=self._clear_trace_session, width=200)
         self.chip.set_bg(t["page"])
-        self.l_hint = tk.Label(bar, text="doppio click su una sessione per il dettaglio",
-                               bg=t["page"], fg=t["muted"], font=t.f_small)
+        self.l_hint = tk.Label(bar, text="", bg=t["page"], fg=t["muted"],
+                               font=t.f_small)
         self.l_hint.pack(side="right", pady=(6, 0))
+        self._hint_full = "doppio click su una sessione per il dettaglio"
+        self._bar = bar
+        bar.bind("<Configure>", lambda _e: self._fit_hint())
 
         holder = tk.Frame(root, bg=t["page"])
         holder.pack(fill="both", expand=True, padx=20)
@@ -3252,18 +3403,18 @@ class App:
                                       share_key=lambda r: r["cost"])
         self.traces_tbl = DataTable(holder, t, TRACE_COLUMNS,
                                     on_activate=self.open_trace,
-                                    share_key=lambda r: r["cost"])
+                                    share_key=lambda r: r["cost"],
+                                    sub=frammento_di)
         self.trend = TrendPanel(holder, self)
         self.months_tbl = DataTable(holder, t, MONTH_COLUMNS,
                                     share_key=lambda r: r["hyp"])
-        self.team_tbl = DataTable(holder, t, TEAM_COLUMNS,
-                                  on_activate=self.open_person,
-                                  share_key=lambda r: r["cost"])
+        self.team_panel = TeamPanel(holder, self)
+        self.team_tbl = self.team_panel.tabella
         self.holder = holder
         self.projects.pack(fill="both", expand=True)
         self.current_table = self.projects
         self._tables = (self.projects, self.sessions_tbl, self.traces_tbl,
-                        self.trend, self.months_tbl, self.team_tbl)
+                        self.trend, self.months_tbl, self.team_panel)
         assert len(self._tables) == len(self.segmented.buttons), (
             "segmenti e tabelle non coincidono: "
             f"{len(self.segmented.buttons)} contro {len(self._tables)}")
@@ -3293,18 +3444,63 @@ class App:
             hint = self.team_hint or "doppio click su una postazione per i suoi progetti"
         else:
             hint = getattr(self, "legend", "")
-        self.l_hint.config(text=hint)
         self._sync_chip(index)
+        self.set_hint(hint)
+
+    def set_hint(self, testo: str) -> None:
+        """La riga di note in alto a destra, tagliata per stare nello spazio.
+
+        Tk, a una label piu' larga della sua fetta, non accorcia il testo: lo
+        disegna comunque, sopra a quello che ha accanto. Il chip finiva sotto.
+        Si taglia in coda perche' e' li' che stanno le cose meno urgenti.
+        """
+        self._hint_full = testo or ""
+        self._fit_hint()
+
+    def _fit_hint(self) -> None:
+        testo = getattr(self, "_hint_full", "")
+        f = self.t.f_small
+        largo = self._bar.winfo_width()
+        if largo <= 1:                       # prima che la finestra si disegni
+            self.l_hint.config(text=testo)
+            return
+        spazio = largo - self.segmented.winfo_reqwidth() - 24
+        if self.chip.winfo_ismapped():
+            spazio -= self.chip.winfo_reqwidth() + 10
+        if f.measure(testo) > spazio:
+            while testo and f.measure(testo + "…") > spazio:
+                testo = testo[:-1]
+            testo = testo.rstrip(" ·") + "…"
+        self.l_hint.config(text=testo)
 
     def _sync_chip(self, index=None):
-        """Il chip vive solo nella scheda Traces, e solo se il filtro e' acceso."""
+        """Il chip: drill-down nei Traces, postazioni da controllare in Persone.
+
+        Due schede, un solo pulsante: e' sempre «stai vedendo meno di tutto, e
+        questo e' il perche'». Un chip acceso su una scheda che non si sta
+        guardando confonderebbe e basta.
+        """
         if index is None:
             index = self.segmented.index
         if index == TAB_TRACES and self.trace_session:
             self.chip.set_text(f"Sessione: {self.trace_session[:8]}   ✕")
-            self.chip.pack(side="left", padx=(10, 0))
+            self.chip.command = self._clear_trace_session
+            self.chip.set_active(False)
+        elif index == TAB_PERSONE and self.team_anomalie:
+            self.chip.set_text(f"⚠ {len(self.team_anomalie)} da controllare"
+                               + ("   ✕" if self.team_solo_anomalie else ""))
+            self.chip.command = self._toggle_anomalie
+            self.chip.set_active(self.team_solo_anomalie)
         else:
             self.chip.pack_forget()
+            return
+        self.chip.pack(side="left", padx=(10, 0))
+
+    def _toggle_anomalie(self):
+        """Mostra solo le postazioni anomale, o di nuovo tutte."""
+        self.team_solo_anomalie = not self.team_solo_anomalie
+        if self._team_payload:
+            self._render_team(*self._team_payload)
 
     def _clear_trace_session(self):
         self.trace_session = None
@@ -3595,7 +3791,7 @@ class App:
                        "passa il mouse sulle intestazioni per la spiegazione  ·  "
                        "qui si misura il consumo, i soldi veri sono nella scheda Mesi")
         if self.segmented.index not in TABS_WITH_OWN_HINT:
-            self.l_hint.config(text=self.legend)
+            self.set_hint(self.legend)
 
     def _on_search(self, _value):
         self.project_filter = self.search.get()
@@ -3613,7 +3809,7 @@ class App:
         needle = (self.project_filter or "").strip().lower()
         # Turni trovati cercando nel testo archiviato: se il testo non e'
         # archiviato l'insieme e' vuoto e non cambia niente.
-        self.trace_hits = cm.cerca_nel_testo(needle) if needle else set()
+        self.trace_hits = cm.cerca_nel_testo(needle) if needle else {}
         sessioni_col_testo = {sid for sid, _n in self.trace_hits}
         if needle:
             # La ricerca vale su tutte le schede, ognuna alla sua grana: una
@@ -3743,11 +3939,14 @@ class App:
         if any(r.get("archiviata") for r in righe):
             n = sum(1 for r in righe if r.get("archiviata"))
             parti.append(f"▪ {n} dall'archivio, senza piu' transcript")
+        n_testo = sum(1 for r in righe if r.get("frammento"))
+        if n_testo:
+            parti.append(f"{n_testo} mostrano dove compare")
         parti.append("doppio click per gli span")
         self.trace_hint = "  ·  ".join(parti)
-        if self.segmented.index == TAB_TRACES:
-            self.l_hint.config(text=self.trace_hint)
         self._sync_chip()
+        if self.segmented.index == TAB_TRACES:
+            self.set_hint(self.trace_hint)
 
         self.traces_tbl.set_rows(righe, {
             "start": f"{len(righe)} turni",
@@ -3761,8 +3960,19 @@ class App:
             self.traces_tbl.set_placeholder(
                 "nessun turno con questo filtro" if needle else "nessun turno")
 
-    def _render_team(self, righe, livello, nota, riepilogo=None):
+    def _render_team(self, righe, livello, nota, riepilogo=None, adozione=None):
         """Scheda Persone: consumo e spesa per postazione, dal raccoglitore."""
+        self._team_payload = (righe, livello, nota, riepilogo, adozione)
+        self.team_panel.set_adozione(adozione or [],
+                                     int((riepilogo or {}).get("seats") or 0))
+        # Le postazioni su cui le due fonti non combaciano. Vanno tenute da
+        # parte prima di filtrare: il chip deve dire quante sono anche mentre
+        # si sta guardando solo quelle.
+        self.team_anomalie = [r for r in righe if r.get("anomalia")]
+        if self.team_solo_anomalie and self.team_anomalie:
+            righe = self.team_anomalie
+        elif self.team_solo_anomalie:
+            self.team_solo_anomalie = False
         self.team_rows = righe
         self.team_summary = riepilogo or {}
         etichetta = {
@@ -3792,22 +4002,26 @@ class App:
             parti.append(f"{len(sole_tel)} senza storico (manca cm_agent)")
         elif sole_tel:
             parti.append("solo telemetria: manca lo storico precedente")
-        # Fatturate e mai viste: la sottrazione dalle postazioni dichiarate dice
-        # quante sono, questa dice quali — ed e' quello che serve per agire.
-        ferme = [r_ for r_ in righe if r_.get("source") == "fatturazione"]
-        if ferme:
-            parti.append(f"{len(ferme)} fatturate senza alcun consumo")
-        muti = [r_ for r_ in righe
-                if r_.get("billed") is None and r_.get("cost")]
-        if muti and any(r_.get("billed") is not None for r_ in righe):
-            parti.append(f"{len(muti)} consumano ma non sono in fattura")
+        # I due casi anomali, ognuno con i suoi nomi: la sottrazione dalle
+        # postazioni dichiarate dice quante sono, il chip dice quali — ed e'
+        # quello che serve per andarle a chiedere a qualcuno.
+        for nome, quali in (self.team_summary.get("anomalie") or {}).items():
+            if quali:
+                parti.append(f"⚠ {len(quali)} {ANOMALIE_TXT.get(nome, nome)}")
         if etichetta:
             parti.append(f"riservatezza: {etichetta}")
-        if righe:
+        # Il suggerimento e' la cosa meno importante della riga: sta davanti solo
+        # finche' non c'e' niente di piu' urgente da dire, e la riga e' corta.
+        if righe and not self.team_anomalie:
             parti.insert(0, "doppio click per i progetti di una postazione")
+        if self.team_solo_anomalie:
+            parti.insert(0, "solo le postazioni da controllare")
         self.team_hint = nota or "  ·  ".join(parti)
+        # Il chip prima della nota: la nota si taglia in base allo spazio che
+        # resta, e quanto ne resta dipende dal chip.
+        self._sync_chip()
         if self.segmented.index == TAB_PERSONE:
-            self.l_hint.config(text=self.team_hint)
+            self.set_hint(self.team_hint)
 
         if not righe:
             self.team_tbl.set_rows([])
@@ -3828,12 +4042,17 @@ class App:
             "tok":      Fmt.tokens(sum(r_["total_tokens"] for r_ in righe)),
             "cr":       Fmt.tokens(sum(r_["tokens"]["cache_read"] for r_ in righe)),
         }
-        if r.get("pagato_totale"):
-            # Il totale pagato copre TUTTE le postazioni, dormienti comprese:
-            # sommare la colonna riga per riga darebbe una cifra piu' bassa e
-            # farebbe sparire proprio i soldi spesi per niente.
+        # Il totale pagato copre TUTTE le postazioni, dormienti comprese:
+        # sommare la colonna riga per riga darebbe una cifra piu' bassa e
+        # farebbe sparire proprio i soldi spesi per niente. Ma sotto un elenco
+        # filtrato quella stessa cifra direbbe una cosa falsa — «ecco quanto
+        # costano queste tre» — quindi con il filtro acceso non si scrive.
+        if r.get("pagato_totale") and not self.team_solo_anomalie:
             totali["paid"] = team_money(r["pagato_totale"], r["currency"])
             totali["ratio"] = fmt_ratio(r.get("ratio", 0))
+        if self.team_solo_anomalie:
+            totali["person"] = (f"{len(righe)} da controllare "
+                                f"su {len(self._team_payload[0])}")
         self.team_tbl.set_rows(righe, totali)
 
     # -- azioni ---------------------------------------------------------------- #
@@ -3969,6 +4188,35 @@ class App:
                                  f"Non sono riuscito a scrivere:\n{exc}")
             return
         self.l_status.config(text=f"riepilogo scritto in {dove}")
+
+    def export_turni(self):
+        """I turni che si stanno guardando, in JSONL.
+
+        Quello che finisce nel file e' esattamente quello che c'e' nella scheda
+        Traces, filtro compreso: la selezione del dataset e' la ricerca che si e'
+        appena fatta, non un secondo insieme di regole da imparare.
+        """
+        righe = self.trace_rows or cm.flatten_traces(self.filtered)
+        if not righe:
+            messagebox.showinfo(APP_TITLE, "Nessun turno da esportare.")
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self.root, title="Esporta i turni", defaultextension=".jsonl",
+            initialfile="turni.jsonl",
+            filetypes=[("JSON Lines", "*.jsonl"), ("Tutti i file", "*.*")])
+        if not path:
+            return
+        try:
+            esito = cm.export_turni_jsonl(righe, path)
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"Esportazione fallita:\n{exc}")
+            return
+        nota = f"{esito['turni']} turni in {path}"
+        if esito["senza_risposta"]:
+            nota += (f" · {esito['senza_risposta']} senza risposta"
+                     + ("" if esito["testo_archiviato"]
+                        else ": il testo non è archiviato"))
+        self.l_status.config(text=nota)
 
     def export_json(self):
         path = filedialog.asksaveasfilename(

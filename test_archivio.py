@@ -47,6 +47,11 @@ PRICING = {
     "cache_multipliers": {"read": 0.10, "write_5m": 1.25, "write_1h": 2.00},
     "server_tools": {"web_search_request": 0.01, "web_fetch_request": 0.0},
     "aliases": {}, "free_models": [],
+    # Queste prove riguardano i transcript di Claude Code. Copilot legge
+    # dallo storage di VS Code della macchina vera, che non ha niente a che
+    # fare con le cartelle temporanee costruite qui: acceso, ci farebbe
+    # trovare sessioni che nessuna prova ha scritto.
+    "copilot": {"enabled": False},
 }
 
 
@@ -99,8 +104,10 @@ def scrivi(base, righe, subagent=None) -> str:
     return path
 
 
-def apri(tmp, formato=cm.CACHE_FORMAT, testo=False) -> ar.Archivio:
-    return ar.Archivio(os.path.join(tmp, "cm-local.db"), formato, testo=testo)
+def apri(tmp, formato=cm.CACHE_FORMAT, testo=False,
+         sola_lettura=False) -> ar.Archivio:
+    return ar.Archivio(os.path.join(tmp, "cm-local.db"), formato, testo=testo,
+                       sola_lettura=sola_lettura)
 
 
 def conta(tmp, tabella) -> int:
@@ -366,13 +373,108 @@ def prova_ricerca_testo(tmp, base):
                  isinstance(a.cerca('fattura - "x" *'), list), True)
         verifica("stringa vuota", a.cerca("   "), [])
 
-    verifica("e la ricerca arriva fino ai turni",
-             len(cm.cerca_nel_testo("riconciliazione")), 1)
+    trovati = cm.cerca_nel_testo("riconciliazione")
+    verifica("e la ricerca arriva fino ai turni", len(trovati), 1)
+    # PF05: il frammento arriva fino alla riga della tabella. Senza, la ricerca
+    # dice quanti turni contengono la parola e non dove.
+    chiave = next(iter(trovati))
+    verifica("il turno porta con se' il frammento",
+             "riconciliazione" in trovati[chiave]["frammento"].lower(), True)
+    verifica("evidenziata", "«" in trovati[chiave]["frammento"], True)
+    verifica("e chi l'ha detta", trovati[chiave]["ruolo"], "claude")
+    verifica("sotto le tre lettere non si cerca", cm.cerca_nel_testo("ri"), {})
+
+    sessioni = cm.collect(base, con_testo(), True, 300, quiet=True)
+    righe = cm.flatten_traces(sessioni, "riconciliazione", anche=trovati)
+    verifica("un turno solo passa il filtro", len(righe), 1)
+    verifica("con il frammento addosso",
+             "riconciliazione" in (righe[0]["frammento"] or "").lower(), True)
+    # Anche le domande sono testo archiviato: se la parola sta li', il frammento
+    # dice «tu». La colonna mostra il prompt tagliato, il frammento mostra il
+    # punto — non e' un doppione, e' il pezzo che il taglio nasconderebbe.
+    altri = cm.flatten_traces(sessioni, "altra", anche=cm.cerca_nel_testo("altra"))
+    verifica("una parola nella domanda e' attribuita a te",
+             [r["frammento_ruolo"] for r in altri], ["tu"])
+    verifica("senza ricerca nessuna riga ha frammenti",
+             {r["frammento"] for r in cm.flatten_traces(sessioni)}, {None})
+    verifica("un insieme al posto della mappa non fa saltare niente",
+             len(cm.flatten_traces(sessioni, "riconciliazione", anche={chiave})), 1)
+
+    # PF06: il dataset esce dalla stessa selezione che si ha davanti.
+    fuori = os.path.join(tmp, "turni.jsonl")
+    esito = cm.export_turni_jsonl(righe, fuori)
+    verifica("un turno esportato", esito["turni"], 1)
+    verifica("con la risposta presa dall'archivio", esito["senza_risposta"], 0)
+    riga = json.loads(open(fuori, encoding="utf-8").read().strip())
+    verifica("la domanda c'e'", riga["domanda"], "domanda generica")
+    verifica("e la risposta per intero, non il frammento",
+             riga["risposta"], "la riconciliazione della fattura è sbagliata")
+    verifica("col costo accanto", riga["costo_usd"] > 0, True)
+    verifica("e l'esito del turno", riga["interrotto"], False)
 
     with apri(tmp, testo=True) as a:
         verifica("dimenticare il testo lo cancella", a.dimentica_testo(), 4)
         verifica("e i numeri restano", a.conta()["turni"] > 0, True)
         verifica("la ricerca non trova piu' niente", a.cerca("riconciliazione"), [])
+
+
+def prova_manutenzione(tmp, base):
+    print("\nQuanto pesa l'archivio, e restituire lo spazio")
+    scrivi(base, [prompt(i * 60, f"domanda numero {i} " + "x" * 400)
+                  for i in range(30)]
+           + [risposta(1900, "req-1", testo="una risposta " + "y" * 4000)])
+    cm.collect(base, con_testo(), True, 300, quiet=True)
+    with apri(tmp, testo=True) as a:
+        p = a.peso()
+        verifica("il file ha un peso", p["file"] > 0, True)
+        verifica("le voci stanno sotto il totale",
+                 sum(p["parti"].values()) <= p["file"], True)
+        verifica("la cache di analisi c'e'", p["parti"]["cache di analisi"] > 0, True)
+        verifica("e il testo pure", p["parti"]["testo"] > 0, True)
+        # PF09 vive di questo numero: se non si misura, non si decide.
+        verifica("i timestamp si contano dentro il record",
+                 p["timestamp"] > 0, True)
+    # ...e la risposta e' stata comprimere, non buttare via: i timestamp ci sono
+    # ancora tutti, ma su disco occupano molto meno.
+    con = sqlite3.connect(os.path.join(tmp, "cm-local.db"))
+    grezzo, in_chiaro = con.execute(
+        "SELECT rec, LENGTH(rec) FROM file LIMIT 1").fetchone()
+    con.close()
+    verifica("il record in cache e' un blob compresso",
+             isinstance(grezzo, bytes), True)
+    verifica("e sta in meno spazio di quanto ne occupi in chiaro",
+             in_chiaro < len(json.dumps(ar.spacchetta(grezzo))), True)
+
+    with apri(tmp) as a:
+        rec = a.record(next(iter(a.indice())))
+        verifica("e si rilegge per intero", isinstance(rec.get("ts"), list), True)
+        verifica("con tutti i suoi istanti", len(rec["ts"]) > 1, True)
+    # Le righe scritte prima, in chiaro, non devono far rileggere niente.
+    con = sqlite3.connect(os.path.join(tmp, "cm-local.db"))
+    path_vecchio = con.execute("SELECT path FROM file LIMIT 1").fetchone()[0]
+    con.execute("UPDATE file SET rec=? WHERE path=?",
+                (json.dumps({"session_id": "vecchia", "ts": [1.0, 2.0]}),
+                 path_vecchio))
+    con.commit()
+    con.close()
+    with apri(tmp) as a:
+        verifica("il vecchio formato in chiaro si legge ancora",
+                 a.record(path_vecchio)["session_id"], "vecchia")
+        verifica("e uno illeggibile non fa saltare niente",
+                 ar.spacchetta(b"non compresso"), None)
+
+    with apri(tmp, testo=True) as a:
+        a.dimentica_testo()
+        prima = a.peso()["file"]
+        recuperati = a.compatta()
+        dopo = a.peso()["file"]
+        verifica("compattare non fa crescere il file", dopo <= prima, True)
+        verifica("e dichiara quanto ha restituito", recuperati, max(0, prima - dopo))
+        verifica("i numeri sopravvivono al VACUUM", a.conta()["turni"] > 0, True)
+
+    with apri(tmp, testo=True, sola_lettura=True) as a:
+        verifica("in sola lettura non si compatta niente", a.compatta(), 0)
+        verifica("ma il peso si legge lo stesso", a.peso()["file"] > 0, True)
 
 
 def prova_sessione_sopravvissuta(tmp, base):
@@ -456,7 +558,8 @@ def main() -> int:
     prove = [prova_cache, prova_formato, prova_potatura,
              prova_potatura_altra_base, prova_turni_riscritti,
              prova_import_json, prova_svuota, prova_collect,
-             prova_testo, prova_ricerca_testo, prova_sessione_sopravvissuta,
+             prova_testo, prova_ricerca_testo, prova_manutenzione,
+             prova_sessione_sopravvissuta,
              prova_sessione_dimezzata, prova_filtro_progetto]
     # `collect` apre l'archivio accanto allo script: durante le prove va
     # spostato altrove, se no si scrive sul cm-local.db vero.

@@ -391,6 +391,26 @@ try:
              sum(r["cost"] for r in righe_b.values()),
              sum(r["cost"] for r in righe.values()))
 
+    # PF12: i due casi anomali vanno segnati riga per riga, non solo contati.
+    marcate, riep_a = cc.team_costs(list(righe_b.values()),
+                                    {"seats": 8, "fee_per_seat": 30.0,
+                                     "currency": "EUR"}, mesi, usd_per_unit=1.08)
+    per_nome = {r["person"]: r for r in marcate}
+    verifica("chi paga e non consuma e' marcato",
+             per_nome[solo_fattura[0]["person"]]["anomalia"], "fatturata_ferma")
+    verifica("chi consuma e non e' in fattura pure",
+             per_nome[carla["person"]]["anomalia"], "non_in_fattura")
+    verifica("chi torna da entrambe le fonti non e' un'anomalia",
+             per_nome[anna["person"]]["anomalia"], None)
+    verifica("e il riepilogo dice quali, non quante",
+             riep_a["anomalie"]["non_in_fattura"], [carla["person"]])
+    # Senza fatturazione caricata ogni riga avrebbe `billed` vuoto: segnalarle
+    # tutte vorrebbe dire accendere la tabella per dire «manca un file».
+    senza_fattura = [{"person": "x", "cost": 5.0, "billed": None,
+                      "source": "transcript"}]
+    verifica("senza fatturazione non si segnala niente",
+             cc.segnala_anomalie(senza_fattura)[0]["anomalia"], None)
+
     print("\nRelazione in Markdown")
     print("-" * 72)
     md = cc.relazione_markdown(
@@ -406,6 +426,12 @@ try:
              "non si paga" in md, True)
     verifica("dichiara cosa non viene raccolto",
              "Cosa non c'è in questi dati" in md, True)
+    # PF12: il riepilogo che si porta in riunione deve nominarle, non contarle.
+    verifica("ha la sezione da controllare", "## Da controllare" in md, True)
+    verifica("con il nome di chi consuma fuori fattura",
+             carla["person"] in md.split("## Da controllare")[1], True)
+    verifica("e sta prima dei progetti, non in fondo",
+             md.index("## Da controllare") < md.index("## Per progetto"), True)
     # Un riepilogo che porta fuori un indirizzo vanifica il livello scelto.
     verifica("non contiene indirizzi", "azienda.it" in md, False)
     verifica("le tabelle sono chiuse", md.count("|---") >= 2, True)

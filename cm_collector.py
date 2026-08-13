@@ -1085,7 +1085,42 @@ def team_costs(righe: list[dict], team: dict, mesi: int,
         "ratio": (api_totale / (pagato_totale * rate)) if (
             pagato_totale and rate) else 0.0,
     }
+    segnala_anomalie(righe)
+    riepilogo["anomalie"] = {
+        nome: [r["person"] for r in righe if r.get("anomalia") == nome]
+        for nome in ANOMALIE
+    }
     return righe, riepilogo
+
+
+# Le due sole cose che, in una tabella di consumo, non sono una misura ma un
+# problema: la fatturazione e la telemetria dicono cose che non combaciano.
+ANOMALIE = {
+    "non_in_fattura":  "consuma, ma non compare nella fatturazione caricata",
+    "fatturata_ferma": "fatturata, ma senza alcun consumo misurato",
+}
+
+
+def segnala_anomalie(righe: list[dict]) -> list[dict]:
+    """Marca le postazioni su cui vale la pena guardare, una per una.
+
+    Dei due casi il piu' grave e' `non_in_fattura`: e' il segnale di una
+    postazione assegnata fuori dal processo di acquisto, e senza un nome accanto
+    resta un numero che nessuno puo' verificare.
+
+    Si segnala solo se la fatturazione e' stata caricata davvero: senza, ogni
+    riga avrebbe `billed` vuoto e l'intera tabella si accenderebbe di allarmi
+    che dicono soltanto «manca un file».
+    """
+    con_fattura = any(r.get("billed") is not None for r in righe)
+    for r in righe:
+        if r.get("source") == "fatturazione":
+            r["anomalia"] = "fatturata_ferma"
+        elif con_fattura and r.get("billed") is None and r.get("cost"):
+            r["anomalia"] = "non_in_fattura"
+        else:
+            r["anomalia"] = None
+    return righe
 
 
 # --------------------------------------------------------------------------- #
@@ -1507,6 +1542,26 @@ def relazione_markdown(store: Store, team: dict,
                  f"per quelle mancano lo storico precedente all'attivazione e "
                  f"l'attribuzione ai progetti, quindi i loro numeri sono "
                  f"**parziali per difetto**, non bassi.")
+        o.append("")
+
+    # Le anomalie prima dei progetti: sono l'unica parte del riepilogo su cui
+    # qualcuno deve fare qualcosa, e in fondo non le leggerebbe nessuno.
+    if any(riep["anomalie"].values()):
+        o.append("## Da controllare")
+        o.append("")
+        for nome, quali in riep["anomalie"].items():
+            if not quali:
+                continue
+            o.append(f"**{len(quali)}** {ANOMALIE[nome]}:")
+            o.append("")
+            for chi in quali:
+                o.append(f"- {chi}")
+            o.append("")
+        o.append("> Una postazione che consuma senza comparire in fattura e' "
+                 "assegnata fuori dal processo di acquisto, oppure la "
+                 "fatturazione caricata non copre tutto il periodo. Una "
+                 "fatturata e ferma e' quota pagata a vuoto — o una postazione "
+                 "su cui il raccoglitore non e' mai stato acceso.")
         o.append("")
 
     if progetti:

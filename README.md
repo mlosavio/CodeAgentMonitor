@@ -86,7 +86,8 @@ python claude_monitor.py --json        :: output machine-readable
 | `--top N` | massimo di sessioni (o di turni con `--session`); `0` = tutte |
 | `--session UUID` | dettaglio di una sessione, anche solo col prefisso |
 | `--traces` | [un turno per riga](#i-turni) invece di una sessione; con `--json` li include |
-| `--search TESTO` | con `--traces`: cerca nel prompt, negli strumenti, nel progetto |
+| `--search TESTO` | con `--traces`: cerca nel prompt, negli strumenti, nel progetto — e [nelle risposte](#cercare-e-vedere-dove) se il testo è archiviato |
+| `--export-turni FILE.jsonl` | [i turni selezionati come dataset](#esportare-i-turni-come-dataset) |
 | `--trend` | [andamento nel tempo e indicatori](#andamenti-e-indicatori) |
 | `--grana giorno\|settimana\|mese` | con `--trend`: ampiezza del periodo |
 | `--finestra GIORNI` | con `--trend`: giorni confrontati con i GIORNI precedenti |
@@ -95,6 +96,10 @@ python claude_monitor.py --json        :: output machine-readable
 | `--idle-gap S` | pausa oltre la quale il tempo non è "attivo" (default 300s) |
 | `--no-cache` / `--clear-cache` | ignora / svuota la cache di analisi ([l'archivio resta](#larchivio-cm-localdb)) |
 | `--dimentica-testo` | cancella dall'archivio il testo delle conversazioni; i numeri restano |
+| `--archivio` | [quanto pesa l'archivio e da cosa](#quanto-pesa-e-come-farlo-calare) |
+
+Le sessioni di [GitHub Copilot](#github-copilot) compaiono accanto a quelle di Claude Code,
+con costo e token a «—».
 | `--no-color` | niente ANSI (rispetta anche `NO_COLOR`) |
 
 ---
@@ -128,16 +133,20 @@ Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla 
 - **Doppio click su un turno** nella scheda Traces apre i suoi span: dove è finito il tempo.
 - La **casella di ricerca** cerca nei nomi dei progetti, nei titoli e **nel testo dei tuoi
   prompt e nei nomi degli strumenti usati**. Una sessione resta visibile anche quando il testo
-  cercato sta solo in uno dei suoi turni.
+  cercato sta solo in uno dei suoi turni; col testo archiviato, sotto ogni turno compare
+  [il pezzo di conversazione in cui la parola sta](#cercare-e-vedere-dove).
+- **Nella scheda Persone**, il chip *⚠ n da controllare* isola le postazioni su cui fatturazione
+  e consumo [non combaciano](#la-terza-fonte-lexport-di-fatturazione), e sopra la tabella c'è
+  [l'adozione mese per mese](#ladozione-mese-per-mese).
 - **Live**: la tessera di destra segue la sessione attiva e si aggiorna ogni 2 s leggendo solo
   i byte nuovi del transcript. Diventa verde quando quella sessione sta lavorando.
 - **Aggiornamento automatico ogni 5 minuti**, configurabile.
-- Filtri per periodo e progetto, export JSON, `Ctrl+C` copia la riga, F5 aggiorna.
+- Filtri per periodo e progetto, export JSON e [JSONL dei turni](#esportare-i-turni-come-dataset), `Ctrl+C` copia la riga, F5 aggiorna.
 
 Aspetto: superfici piatte, tabella disegnata su Canvas, tema chiaro/scuro che segue il sistema
 (barra del titolo inclusa) e si forza con `--light` / `--dark`.
 
-Opzioni: `--theme auto|light|dark`, `--tab progetti|sessioni|traces|mesi|persone`, `--live`,
+Opzioni: `--theme auto|light|dark`, `--tab progetti|sessioni|traces|andamento|mesi|persone`, `--live`,
 `--detail <uuid>`, `--auto-refresh MIN`, `--locale us|it`.
 
 Il pulsante **Configura** apre le impostazioni vere, non il file JSON: abbonamento, team,
@@ -299,6 +308,38 @@ FROM turno ORDER BY costo DESC LIMIT 10;
 
 e a **conservarlo** quando il transcript non c'è più. `*.db` è già in `.gitignore`.
 
+### Quanto pesa, e come farlo calare
+
+```
+python claude_monitor.py --archivio
+```
+
+dice quanto occupa il file e **da cosa** — senza quella risposta le uniche mosse possibili
+sono cancellare tutto o non toccare niente:
+
+```
+      1.1 MB  in tutto
+    452.4 KB  turni                  40%
+    371.2 KB  cache di analisi       33%
+     25.8 KB  sessioni                2%
+```
+
+La cache di analisi è **compressa**. Dentro c'è soprattutto la lista dei timestamp di ogni
+evento, che da sola pesa più di tutto il resto messo insieme (708 KB su 1,2 MB in chiaro):
+serve a ricalcolare durate e tempo attivo cambiando `--idle-gap` **senza rileggere i
+transcript**, ed è l'unica ragione per cui la si conserva. Comprimerla la riduce più di quanto
+la ridurrebbe buttarla via a metà — a poco più di un quarto, contro un terzo — e non toglie
+niente a nessuno. Gli archivi scritti dalle versioni precedenti si convertono da soli, una
+volta, al primo avvio.
+
+`--dimentica-testo` compatta il file dopo aver cancellato: senza, le pagine liberate restano
+*dentro* il file e a chi ha appena chiesto di dimenticare qualcosa sembra — a ragione — che non
+sia successo niente.
+
+Quello che **non** c'è, di proposito: una politica di cancellazione automatica per età. Una
+regola che sbaglia, su un archivio che è l'unica copia rimasta di conversazioni cancellate,
+distrugge quello che doveva proteggere.
+
 ---
 
 ## I turni
@@ -384,9 +425,39 @@ un turno. Tenerli per ogni sessione vorrebbe dire portarsi dietro argomenti e ri
 comando — megabyte per un dettaglio che si guarda una volta. Il prezzo è un attimo di attesa
 all'apertura di un turno di una sessione grossa.
 
+### Cercare, e vedere dove
+
 **La ricerca** cerca sempre nei tuoi prompt, nei nomi degli strumenti, nei progetti e nei
 titoli. Se hai acceso [`archivio.testo`](#archiviare-anche-il-testo) entra anche **dentro le
-risposte**, con un indice a testo pieno.
+risposte**, con un indice a testo pieno — e allora ogni turno porta con sé **il pezzo di
+conversazione in cui la parola compare**, con l'etichetta di chi l'ha detta:
+
+```
+13/08 14:30  a1b2c3d4 #14  risposta  …l'«archivio» li produce già e vengono buttati via…
+13/08 13:31  a1b2c3d4 #10  risposta  …le sue righe vanno in «archivio» come acquisite…
+13/08 13:50  a1b2c3d4 #13  tu        …apri_«archivio»(use_cache, quiet, testo)…
+```
+
+Nella GUI lo stesso frammento compare come seconda riga sotto il turno. È la differenza fra una
+ricerca che **restringe un elenco** e una che **risponde**: senza, sapresti quanti turni
+contengono la parola e non dove.
+
+### Esportare i turni come dataset
+
+```bat
+python claude_monitor.py --traces --search riconciliazione --export-turni turni.jsonl
+```
+
+Un turno per riga, con domanda, risposta, modelli, durata, strumenti, costo, cache hit e se è
+stato interrotto — cioè già la forma in cui si valuta un prompt o si confronta un modello. Nella
+GUI è *Esporta → Turni selezionati in JSONL*.
+
+Il criterio di selezione non è un secondo insieme di regole da imparare: **è il filtro che hai
+davanti**. Cerchi «riconciliazione», restringi a una sessione, esporti quello.
+
+Le risposte vengono dall'archivio del testo. Senza, escono `null` e il comando dice **quanti**
+turni sono usciti senza: un dataset con metà delle risposte vuote è peggio di nessun dataset, e
+non deve sembrare completo.
 
 ---
 
@@ -457,6 +528,64 @@ Gli indicatori di **adozione** — giorni di lavoro, progetti toccati, progetti 
 alla domanda diversa da «quanto costa»: se lo strumento sta entrando nel lavoro o è rimasto un
 esperimento. Per più postazioni la domanda equivalente è quante di quelle pagate sono attive, e
 quella sta nella [scheda Persone](#più-macchine-il-pannello-di-team).
+
+---
+
+## GitHub Copilot
+
+Seconda sorgente, letta dallo storage delle chat di VS Code. **Accesa di default**: leggere
+quei file è lo stesso gesto che leggere i transcript di Claude Code — file già sul disco, della
+stessa persona, sulla stessa macchina. Per spegnerla, in `config.json`:
+
+```json
+"copilot": { "enabled": false }
+```
+
+```
+%APPDATA%\Code\User\workspaceStorage\<hash>\chatSessions\*.json    legate a un progetto
+%APPDATA%\Code\User\globalStorage\emptyWindowChatSessions\*.json   aperte senza cartella
+```
+
+Il progetto si ricava da `workspace.json` accanto alle chat. Le sessioni aperte senza cartella
+compaiono lo stesso, sotto *(senza progetto)*: sono lavoro fatto, e scartarle perché non si sa
+dove collocarlo vorrebbe dire perderlo.
+
+### Cosa arriva, e cosa no
+
+| | c'è? |
+|---|---|
+| turni, orari, titolo, progetto | **sì** |
+| **latenza, misurata** | **sì** — `totalElapsed`, più precisa di quella che [deduciamo](#come-si-ricava-la-durata-di-una-richiesta) per Claude Code |
+| modello | **sì** — `copilot/claude-sonnet-4.5`, `copilot/auto`, … |
+| domande e risposte | **sì** |
+| chiamate agli strumenti, con i nomi | **sì** — `copilot_readFile`, `run_in_terminal`, … |
+| **token** | **no** |
+| **costo** | **no** |
+
+I token non ci sono e non sono deducibili: le uniche chiavi che li nominano sono
+`maxInputTokens` e `maxOutputTokens`, che sono i **limiti del modello**, non il consumo.
+
+**Quei numeri restano «—», mai zero.** Copilot si paga a quota fissa per postazione: un «se
+fosse API» calcolato lì sarebbe una cifra inventata, e verrebbe letta come una spesa. Uno zero
+sarebbe un'altra bugia — direbbe che quel turno non ha consumato niente. Il trattino dice la
+sola cosa vera: qui non si sa. Sotto le tabelle c'è una riga che lo spiega, perché un «—» in una
+colonna di costi si legge come uno zero se nessuno dice il contrario.
+
+Le colonne **Fonte** nelle schede Sessioni e Traces dicono da dove viene ogni riga.
+
+### Perché è una fonte diversa, non un secondo transcript
+
+Copilot **non scrive un transcript**. Quello è storage interno di VS Code, in un formato non
+pubblico che cambia con le versioni dell'estensione. Su una fonte così non si può dire «se il
+parser sbaglia, si rilegge»: il file di oggi domani può non esserci o avere un'altra forma.
+
+Perciò quello che si legge finisce in [archivio](#larchivio-cm-localdb) come
+`origine = 'acquisito'` e non si prova a ricostruirlo — è la stessa regola che vale per i
+transcript scaduti. E un file con una forma inattesa fa perdere quella sessione, non fa cadere
+il programma: le prove ne costruiscono apposta di rotti, vuoti e con turni malformati.
+
+Una cosa che il formato non dice: **quanti giri fra modello e strumenti** ci sono stati in un
+turno. Il file registra una richiesta per turno, quindi `REQ` vale 1 e non è una stima.
 
 ---
 
@@ -844,6 +973,38 @@ quota, noi misuriamo il consumo a valore di listino — e quello che conta è un
 
 Nessuna delle due fonti da sola mostra questi casi. Esce con codice 1 se ne trova.
 
+Nel pannello quelle righe sono segnate con **⚠** accanto al nome, e il chip in alto — *⚠ 3 da
+controllare* — le isola con un click. Contarle dice quante sono; questo dice **quali**, che è
+l'unica forma in cui si può andare a chiedere a qualcuno. Con il filtro acceso il totale della
+colonna *Hai pagato* sparisce: sotto tre righe su otto direbbe una cosa falsa.
+
+Le stesse righe finiscono nella sezione **Da controllare** del riepilogo, prima dei progetti:
+sono l'unica parte del documento su cui qualcuno deve fare qualcosa, e in fondo non le
+leggerebbe nessuno.
+
+### L'adozione, mese per mese
+
+La scheda Persone dice quante postazioni sono attive *adesso*. Sopra la tabella c'è come è
+arrivata a esserlo:
+
+```
+Postazioni attive per mese
+ 8 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄  8 pagate
+ 6                                        ╭──
+ 4                              ╭─────────╯
+ 2      ╭──────────╮────────────╯                5
+ 0 ─────╯
+   03/2026  04/2026  05/2026  06/2026  07/2026  08/2026
+```
+
+La riga tratteggiata sono le postazioni **dichiarate** in `team.seats`, e non è un ornamento: le
+postazioni ferme restano invisibili — chi non usa lo strumento non manda niente — quindi la
+curva delle attive va letta contro quel numero, mai da sola. Senza `seats` dichiarato la riga
+non c'è, e il grafico dice solo che il gruppo cresce.
+
+Il grafico compare da due mesi di dati in su: con un mese solo un andamento non esiste, e
+disegnarne uno vorrebbe dire inventarlo.
+
 ### Il riepilogo da portare in riunione
 
 ```bat
@@ -995,6 +1156,35 @@ Due conseguenze pratiche: il costo di una sessione lunga lo fa **quanto contesto
 dietro**, non quante risposte produce; e in abbonamento quei token non si pagano in denaro ma
 **in limiti**, che è il vincolo vero.
 
+### Il consumo oltre la finestra standard
+
+I modelli a contesto esteso costano di più, e il transcript scrive il loro id **senza** il
+suffisso della finestra: `claude-opus-5`, non `claude-opus-5[1m]`. Per nome sono
+indistinguibili — ma non per i numeri. Una richiesta che ha fatto entrare 604.000 token non può
+essere passata da una finestra da 200.000, e su quella non c'è niente da dedurre.
+
+Quelle richieste vengono contate, e il tool lo dice:
+
+```
+443 richieste hanno superato i 200k token di contesto (162.14M in tutto):
+sono girate su un modello a finestra estesa, che il transcript non distingue per nome
+ma che si paga a listino maggiorato.
+Col rapporto dichiarato in long_context sarebbero $97.86 in più, non compresi nei totali.
+```
+
+Il maggiorato **non viene sommato ai costi**, e il rapporto è configurazione:
+
+```json
+"finestra_standard": 200000,
+"long_context": { "in": 2.0, "out": 1.5 }
+```
+
+Due ragioni per tenerlo fuori dai totali. La prima: quei moltiplicatori sono un listino, i
+listini cambiano, e un numero dichiarato da te che finisce in una colonna di costi diventa vero
+appena qualcuno lo legge. La seconda: rifonderlo cambierebbe i numeri storici di chiunque
+aggiorni, senza che nessuno abbia cambiato niente. Meglio un limite noto, con accanto la sua
+misura, che una stima silenziosa. Con `"in": null` la riga non compare affatto.
+
 ---
 
 ## Due dettagli che cambiano il risultato
@@ -1123,9 +1313,11 @@ motivo per cui l'archivio **non** è stato messo per la velocità.
 
 ## Limiti noti
 
-- **Contesto 1M**: i modelli con finestra estesa hanno un listino premium, ma il transcript
-  registra l'id senza il suffisso `[1m]` — non sono distinguibili a posteriori e vengono
-  conteggiati al prezzo standard.
+- **Contesto 1M**: i modelli con finestra estesa hanno un listino premium, e il transcript
+  registra l'id **senza** il suffisso `[1m]` — per nome non si distinguono. Si distinguono per i
+  numeri: una richiesta che ha fatto entrare più token di quanti la finestra standard ne
+  contenga non può esserci passata dentro. Quelle richieste vengono **contate e dichiarate**
+  ([sotto](#il-consumo-oltre-la-finestra-standard)), ma il maggiorato non entra nei totali.
 - **Modelli sconosciuti**: se un modello non è nel listino il costo è 0 e viene stampato un
   avviso con l'id da aggiungere.
 - **I prezzi cambiano**: `config.json` ha un campo `updated`, mostrato in fondo a ogni report.
@@ -1171,6 +1363,12 @@ python claude_monitor.py --json --top 0 > dopo.json
 Le due uscite devono differire solo per `generated_at` e per le sessioni cresciute nel frattempo.
 Se tocchi la formula di costo, `node statusline/cm-statusline.js --selftest <uuid>` deve
 coincidere con `python claude_monitor.py --session <uuid>` al centesimo.
+
+Se tocchi la sorgente [Copilot](#github-copilot), `python test_copilot.py` deve restare verde.
+Meta' delle prove guardano che non venga inventato niente — costo e token restano «non noti» e
+non diventano zero — e l'altra meta' che un file con una forma inattesa faccia perdere quella
+sessione invece di far cadere il programma: e' storage interno di VS Code, e cambia con le
+versioni dell'estensione.
 
 Se tocchi gli [andamenti](#andamenti-e-indicatori), `python test_statistiche.py` deve restare
 verde. Guarda i punti in cui una statistica dice una bugia senza accorgersene: che i periodi

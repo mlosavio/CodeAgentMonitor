@@ -47,6 +47,11 @@ PRICING = {
     "cache_multipliers": {"read": 0.10, "write_5m": 1.25, "write_1h": 2.00},
     "server_tools": {"web_search_request": 0.01, "web_fetch_request": 0.0},
     "aliases": {}, "free_models": [],
+    # Queste prove riguardano i transcript di Claude Code. Copilot legge
+    # dallo storage di VS Code della macchina vera, che non ha niente a che
+    # fare con le cartelle temporanee costruite qui: acceso, ci farebbe
+    # trovare sessioni che nessuna prova ha scritto.
+    "copilot": {"enabled": False},
 }
 
 
@@ -398,6 +403,44 @@ def prova_clip():
     verifica("None diventa vuoto", cm.clip_blob(None, 100), "")
 
 
+def prova_contesto_esteso(base):
+    """PF08: i modelli a finestra estesa si riconoscono dai numeri, non dal nome."""
+    print("\nRichieste che nella finestra standard non ci starebbero")
+    scrivi(base, [
+        prompt(0, "una domanda breve"),
+        risposta(5, "req-1", inp=1000, out=200, cr=50_000),
+        prompt(60, "e una su un contesto enorme"),
+        risposta(65, "req-2", inp=1000, out=5000, cr=500_000),
+        prompt(120, "e un'altra"),
+        risposta(125, "req-3", inp=1000, out=1000, cr=300_000),
+    ])
+    s = sessione_di(base)
+    ce = s["contesto_esteso"]
+    verifica("due richieste oltre la finestra", ce["richieste"], 2)
+    verifica("la prima, che ci sta dentro, non conta",
+             ce["richieste"] < s["assistant_msgs"], True)
+    verifica("senza rapporto dichiarato non si stima niente", ce["extra"], 0.0)
+    verifica("e lo si dice", ce["dichiarato"], False)
+
+    # Il rincaro dichiarato non entra nei totali: si affianca.
+    caro = dict(PRICING, long_context={"in": 2.0, "out": 1.5})
+    s2 = cm.collect(base, caro, use_cache=False, idle_gap=300, quiet=True)[0]
+    verifica("col rapporto dichiarato c'e' un maggiorato",
+             s2["contesto_esteso"]["extra"] > 0, True)
+    verifica("ed e' dichiarato tale", s2["contesto_esteso"]["dichiarato"], True)
+    quasi("ma il costo della sessione non cambia", s2["cost"], s["cost"])
+
+    # Chi non vuole vederlo alza la soglia: nessuna richiesta la supera piu'.
+    largo = dict(PRICING, finestra_standard=1_000_000)
+    s3 = cm.collect(base, largo, use_cache=False, idle_gap=300, quiet=True)[0]
+    verifica("con una finestra piu' grande non c'e' piu' niente da segnalare",
+             s3["contesto_esteso"]["richieste"], 0)
+
+    verifica("il contesto e' quello che entra, non quello che esce",
+             cm.contesto_di({"input": 10, "cache_read": 5, "cache_w5m": 1,
+                             "cache_w1h": 2, "output": 999}), 18)
+
+
 def main() -> int:
     print("=" * 72)
     print("Prove sui turni")
@@ -405,7 +448,7 @@ def main() -> int:
     prove = [prova_confini, prova_riemissione, prova_streaming, prova_sidechain,
              prova_interruzione, prova_prima_del_prompt, prova_subagent,
              prova_cache_e_mediana, prova_span, prova_finestra_del_turno,
-             prova_idempotenza, prova_ricerca]
+             prova_idempotenza, prova_ricerca, prova_contesto_esteso]
     for prova in prove:
         tmp = tempfile.mkdtemp(prefix="cm-turni-")
         base = os.path.join(tmp, "projects")

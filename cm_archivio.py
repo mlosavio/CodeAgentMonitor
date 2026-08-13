@@ -43,6 +43,7 @@ import json
 import os
 import sqlite3
 import time
+import zlib
 
 SCHEMA = 2
 
@@ -53,15 +54,16 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 -- Cache di analisi: un transcript per riga. `rec` e' il record derivato dal
--- parser, in JSON, cosi' com'e' — se cambia lo schema del parser questa tabella
--- si svuota e basta, l'archivio non si tocca.
+-- parser, in JSON compresso — se cambia lo schema del parser questa tabella si
+-- svuota e basta, l'archivio non si tocca. Le righe vecchie in chiaro si
+-- rileggono lo stesso: vedi `spacchetta`.
 CREATE TABLE IF NOT EXISTS file (
     path       TEXT PRIMARY KEY,
     size       INTEGER NOT NULL,
     mtime      REAL    NOT NULL,
     session_id TEXT,
     subagent   INTEGER NOT NULL DEFAULT 0,
-    rec        TEXT    NOT NULL,
+    rec        BLOB    NOT NULL,
     letto      REAL    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS file_sessione ON file(session_id);
@@ -177,6 +179,36 @@ def _js(value) -> str:
                       ensure_ascii=False, sort_keys=True)
 
 
+def impacchetta(rec: dict) -> bytes:
+    """Il record di un transcript, compresso, per andare in cache.
+
+    Dentro c'e' soprattutto la lista dei timestamp di ogni evento, che da sola
+    pesa piu' di tutto il resto messo insieme. Il modo ovvio di rimpicciolirla
+    sarebbe non conservarla — tenere minimo, massimo e la somma degli intervalli
+    invece degli istanti — ma quella lista e' l'unica ragione per cui si puo'
+    cambiare `--idle-gap` e rivedere i tempi senza rileggere i transcript.
+
+    Comprimerla la riduce piu' di quanto la riduca buttarla via a meta' (misurato:
+    a poco piu' di un quarto, contro un terzo), e non toglie niente a nessuno.
+    """
+    return zlib.compress(json.dumps(rec, ensure_ascii=False).encode("utf-8"), 6)
+
+
+def spacchetta(blob) -> dict | None:
+    """Il contrario, e anche il vecchio formato in chiaro.
+
+    Le righe scritte prima sono testo JSON: si continuano a leggere invece di
+    invalidare la cache, che vorrebbe dire rileggere tutti i transcript per un
+    cambiamento che non riguarda cosa c'e' scritto ma come e' scritto.
+    """
+    try:
+        if isinstance(blob, (bytes, bytearray)):
+            return json.loads(zlib.decompress(blob).decode("utf-8"))
+        return json.loads(blob)
+    except (ValueError, TypeError, zlib.error):
+        return None
+
+
 def bisect_destra(valori: list[float], x: float) -> int:
     return bisect.bisect_right(valori, x)
 
@@ -220,6 +252,7 @@ class Archivio:
             self._allinea_schema()
             self._allinea_formato(formato_parser)
             self._allinea_testo(testo)
+            self._ripacchetta()
         self.con.commit()
 
     def _prova_fts(self) -> bool:
@@ -300,6 +333,37 @@ class Archivio:
         self._scrivi_meta("formato_parser", formato_parser)
         self._scrivi_meta("schema", SCHEMA)
 
+    def _ripacchetta(self) -> int:
+        """Comprime, una volta sola, i record scritti in chiaro dalle versioni
+        precedenti.
+
+        Senza, si comprimerebbero soltanto i transcript che cambiano, e un
+        archivio di lavoro fermo resterebbe grande come prima per mesi — cioe'
+        il guadagno arriverebbe proprio a chi non ne ha bisogno. E' una
+        riscrittura di cache: se si interrompe a meta' non si perde niente, e al
+        giro dopo riprende da dove era.
+        """
+        if self._leggi_meta("rec_compressi") == "1":
+            return 0
+        try:
+            righe = self.con.execute(
+                "SELECT path, rec FROM file WHERE typeof(rec)='text'").fetchall()
+            for path, rec in righe:
+                d = spacchetta(rec)
+                if d is None:
+                    self.con.execute("DELETE FROM file WHERE path=?", (path,))
+                    continue
+                self.con.execute("UPDATE file SET rec=? WHERE path=?",
+                                 (impacchetta(d), path))
+        except sqlite3.Error:
+            return 0
+        self._scrivi_meta("rec_compressi", 1)
+        if righe:
+            # Le pagine liberate restano dentro il file: qui conviene ripulire
+            # subito, perche' succede una volta sola e libera parecchio.
+            self.compatta()
+        return len(righe)
+
     # -- cache di analisi --------------------------------------------------- #
 
     def indice(self) -> dict[str, tuple[int, float]]:
@@ -312,10 +376,7 @@ class Archivio:
             "SELECT rec FROM file WHERE path=?", (chiave(path),)).fetchone()
         if not riga:
             return None
-        try:
-            return json.loads(riga[0])
-        except (ValueError, TypeError):
-            return None
+        return spacchetta(riga[0])
 
     # Quello che il parser produce solo per la lettura a fondo: in cache non ci
     # va, perche' e' il testo — che ha una tabella sua e regole sue — e sono i
@@ -330,7 +391,7 @@ class Archivio:
             " VALUES (?,?,?,?,?,?,?)",
             (chiave(path), size, mtime, rec.get("session_id"),
              1 if rec.get("is_subagent") else 0,
-             json.dumps(magro, ensure_ascii=False), time.time()))
+             impacchetta(magro), time.time()))
 
     def pota(self, base: str, vivi: set[str]) -> int:
         """Toglie dalla cache i transcript spariti da sotto `base`.
@@ -558,7 +619,8 @@ class Archivio:
 
     # -- rilettura ---------------------------------------------------------- #
 
-    def sessioni_orfane(self, escludi: set[str] | None = None) -> list[dict]:
+    def sessioni_orfane(self, escludi: set[str] | None = None,
+                        fonti: set[str] | None = None) -> list[dict]:
         """Le sessioni di cui non resta nemmeno un transcript.
 
         Sono quelle cancellate da `cleanupPeriodDays`: qui dentro c'e' l'unica
@@ -569,6 +631,10 @@ class Archivio:
 
         Restano fuori quelle che qualche file ce l'hanno ancora: quelle vengono
         scansionate, e sommarle due volte raddoppierebbe i conti.
+
+        `fonti` limita a quelle sorgenti. Serve a chi ha spento una sorgente in
+        configurazione: le sue righe restano in archivio — nessuno ha chiesto di
+        cancellarle — ma non devono ricomparire dalla porta di servizio.
         """
         escludi = escludi or set()
         sql = ("SELECT * FROM sessione s WHERE NOT EXISTS"
@@ -579,6 +645,8 @@ class Archivio:
         for riga in cur.fetchall():
             r = dict(zip(nomi, riga))
             if r["session_id"] in escludi:
+                continue
+            if fonti is not None and (r.get("fonte") or "claude-code") not in fonti:
                 continue
             out.append(self._a_sessione(r))
         return out
@@ -592,12 +660,18 @@ class Archivio:
             return default if v is None else v
 
         sid = r["session_id"]
+        fonte = r.get("fonte") or "claude-code"
         per_model = carica("per_modello", {})
         traces = self._turni_di(sid)
+        for t in traces:
+            t["costo_noto"] = fonte == "claude-code"
         return {
             "session_id": sid,
             "archiviata": True,
-            "fonte": r.get("fonte") or "claude-code",
+            # Solo Claude Code dichiara i token, quindi solo li' il costo e' un
+            # numero misurato invece che una casella vuota.
+            "costo_noto": fonte == "claude-code",
+            "fonte": fonte,
             "origine": r.get("origine") or "acquisito",
             "file_mancanti": r.get("file_mancanti") or 0,
             "project": r.get("progetto"),
@@ -677,6 +751,111 @@ class Archivio:
             "acquisite": uno("SELECT COUNT(*) FROM sessione WHERE origine='acquisito'"),
             "messaggi": uno("SELECT COUNT(*) FROM messaggio"),
         }
+
+    # -- manutenzione ------------------------------------------------------- #
+
+    def _byte_file(self) -> int:
+        """Il file e i suoi compagni. Il WAL conta: e' spazio occupato davvero."""
+        totale = 0
+        for suffisso in ("", "-wal", "-shm"):
+            try:
+                totale += os.path.getsize(self.path + suffisso)
+            except OSError:
+                pass
+        return totale
+
+    def _byte_tabella(self, tabella: str, colonna: str | None = None) -> int:
+        """Byte dei dati di una tabella (o di una sua colonna), circa.
+
+        Si contano i valori, non le pagine: la vista `dbstat` che li darebbe
+        esatti non c'e' in tutte le build di SQLite — nemmeno in quella con cui
+        gira questo — e un numero che a volte c'e' e a volte no non si mette in
+        un pannello. La somma delle parti resta sotto la dimensione del file,
+        che comprende anche indici e pagine libere.
+        """
+        try:
+            if colonna:
+                colonne = [colonna]
+            else:
+                colonne = [r[1] for r in self.con.execute(
+                    f"PRAGMA table_info({tabella})")]
+            if not colonne:
+                return 0
+            somma = " + ".join(f"COALESCE(LENGTH({c}),0)" for c in colonne)
+            return self.con.execute(
+                f"SELECT COALESCE(SUM({somma}),0) FROM {tabella}").fetchone()[0]
+        except sqlite3.Error:
+            return 0
+
+    def peso(self) -> dict:
+        """Quanto occupa l'archivio e dove sono finiti i byte.
+
+        Serve a rispondere a una domanda sola: se il file e' diventato grande,
+        cos'e' che lo tiene grande. Senza questa risposta le uniche mosse
+        possibili sono cancellare tutto o non toccare niente.
+        """
+        parti = {
+            "cache di analisi": self._byte_tabella("file"),
+            "sessioni": self._byte_tabella("sessione"),
+            "turni": self._byte_tabella("turno"),
+            "testo": self._byte_tabella("messaggio"),
+        }
+        if self.fts:
+            parti["indice di ricerca"] = self._byte_tabella("messaggio_fts_data")
+        chiaro, timestamp = self._byte_chiaro()
+        return {
+            "file": self._byte_file(),
+            "parti": {k: v for k, v in parti.items() if v},
+            "chiaro": chiaro,
+            "timestamp": timestamp,
+        }
+
+    def _byte_chiaro(self) -> tuple[int, int]:
+        """La cache di analisi in chiaro, e quanto ne sono i soli timestamp.
+
+        Serve a dire due cose che il numero su disco non dice: quanto rende la
+        compressione, e quanto costa la scelta di conservare ogni istante invece
+        di riassumerlo. Si legge tutto, che su qualche centinaio di righe non si
+        sente; e' un comando di manutenzione, non una schermata.
+        """
+        chiaro = timestamp = 0
+        try:
+            for (rec,) in self.con.execute("SELECT rec FROM file"):
+                d = spacchetta(rec)
+                if not isinstance(d, dict):
+                    continue
+                chiaro += len(json.dumps(d, ensure_ascii=False))
+                if d.get("ts"):
+                    timestamp += len(_js(d["ts"]))
+        except sqlite3.Error:
+            return 0, 0
+        return chiaro, timestamp
+
+    def compatta(self) -> int:
+        """VACUUM: restituisce al disco lo spazio delle righe cancellate.
+
+        Senza, cancellare il testo libera pagine *dentro* il file e il file
+        resta grande uguale — che a chi ha appena chiesto di dimenticare
+        qualcosa sembra, ragionevolmente, che non sia successo niente.
+        Ritorna i byte recuperati.
+        """
+        if self.sola_lettura:
+            return 0
+        prima = self._byte_file()
+        self.commit()
+        livello = self.con.isolation_level
+        self.con.isolation_level = None      # VACUUM non gira in transazione
+        try:
+            self.con.execute("VACUUM")
+            # Il VACUUM in modalita' WAL riscrive tutto passando dal giornale:
+            # senza svuotarlo, il file principale cala e lo spazio occupato no,
+            # e il numero che restituiamo sarebbe una bugia.
+            self.con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            return 0
+        finally:
+            self.con.isolation_level = livello
+        return max(0, prima - self._byte_file())
 
     # -- ciclo di vita ------------------------------------------------------ #
 

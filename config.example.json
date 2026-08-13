@@ -26,6 +26,11 @@
     "currency": "EUR"
   },
 
+  "_copilot": "GitHub Copilot come seconda sorgente, letta dallo storage delle chat di VS Code. Acceso: leggere quei file e' lo stesso gesto che leggere i transcript di Claude Code, sulla stessa macchina e della stessa persona. Di Copilot arrivano turni, orari, modello, latenza misurata, domande, risposte e strumenti; NON arrivano token e costo, perche' si paga a quota fissa e non vengono dichiarati da nessuna parte — restano '—', che vuol dire non misurabile, non zero. Metti false per non vederle.",
+  "copilot": {
+    "enabled": true
+  },
+
   "_archivio": "L'archivio locale (cm-local.db). I numeri di sessioni e turni ci finiscono sempre: servono a rileggerli senza riscansionare, e a non perderli quando Claude Code cancella i transcript vecchi (cleanupPeriodDays). 'testo' invece riguarda il CONTENUTO delle conversazioni — le tue domande e le risposte, non i risultati degli strumenti. Acceso, una conversazione resta leggibile e cercabile anche dopo che il suo transcript e' sparito; e vuol dire tenere quel testo su disco, che e' una decisione, per cui il predefinito e' spento. Accenderlo fa rileggere tutti i transcript una volta. Per tornare indietro: 'python claude_monitor.py --dimentica-testo'.",
   "archivio": {
     "testo": false
@@ -35,6 +40,13 @@
   "fx": {
     "usd_per_unit": null,
     "updated": "2026-01-01"
+  },
+
+  "_long_context": "Il rincaro dei modelli a finestra estesa. Il transcript registra l'id del modello SENZA il suffisso della finestra ('claude-opus-5', non 'claude-opus-5[1m]'): a posteriori i due non si distinguono per nome, ma si distinguono per i numeri — una richiesta che ha fatto entrare piu' token di quanti 'finestra_standard' ne contenga non puo' esserci passata dentro. 'in' e 'out' sono i moltiplicatori del listino su quelle richieste; VERIFICALI, come tutti i prezzi qui dentro. Il maggiorato non viene sommato ai costi: si mostra a parte, perche' rifonderlo nei totali cambierebbe i numeri storici in base a un rapporto dichiarato da te. Metti 'in' e 'out' a null per non vederlo affatto.",
+  "finestra_standard": 200000,
+  "long_context": {
+    "in": 2.0,
+    "out": 1.5
   },
 
   "_pricing": "Listino API in USD per 1.000.000 di token. I prezzi cambiano: aggiornali qui e aggiorna la data sopra.",
