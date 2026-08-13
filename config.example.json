@@ -26,6 +26,11 @@
     "currency": "EUR"
   },
 
+  "_archivio": "L'archivio locale (cm-local.db). I numeri di sessioni e turni ci finiscono sempre: servono a rileggerli senza riscansionare, e a non perderli quando Claude Code cancella i transcript vecchi (cleanupPeriodDays). 'testo' invece riguarda il CONTENUTO delle conversazioni — le tue domande e le risposte, non i risultati degli strumenti. Acceso, una conversazione resta leggibile e cercabile anche dopo che il suo transcript e' sparito; e vuol dire tenere quel testo su disco, che e' una decisione, per cui il predefinito e' spento. Accenderlo fa rileggere tutti i transcript una volta. Per tornare indietro: 'python claude_monitor.py --dimentica-testo'.",
+  "archivio": {
+    "testo": false
+  },
+
   "_fx": "Serve solo se paghi l'abbonamento in una valuta diversa dal listino API (che e' in USD): quanti USD vale un'unita' della tua valuta. null = non mostrare il rapporto di resa.",
   "fx": {
     "usd_per_unit": null,

@@ -70,6 +70,8 @@ python claude_monitor_gui.py           :: interfaccia grafica
 python claude_monitor.py               :: riepilogo delle ultime sessioni
 python claude_monitor.py --by-month    :: consumo, speso e resa per mese
 python claude_monitor.py --by-project  :: totali per progetto
+python claude_monitor.py --traces      :: un turno per riga, non una sessione
+python claude_monitor.py --trend       :: andamento nel tempo e indicatori
 python claude_monitor.py --watch       :: cruscotto live nel terminale
 python claude_monitor.py --json        :: output machine-readable
 ```
@@ -83,10 +85,16 @@ python claude_monitor.py --json        :: output machine-readable
 | `--since` | `7d`, `24h`, `90m`, `oggi`, `2026-03-01` |
 | `--top N` | massimo di sessioni (o di turni con `--session`); `0` = tutte |
 | `--session UUID` | dettaglio di una sessione, anche solo col prefisso |
+| `--traces` | [un turno per riga](#i-turni) invece di una sessione; con `--json` li include |
+| `--search TESTO` | con `--traces`: cerca nel prompt, negli strumenti, nel progetto |
+| `--trend` | [andamento nel tempo e indicatori](#andamenti-e-indicatori) |
+| `--grana giorno\|settimana\|mese` | con `--trend`: ampiezza del periodo |
+| `--finestra GIORNI` | con `--trend`: giorni confrontati con i GIORNI precedenti |
 | `--chat` | con `--session`: la conversazione in Markdown |
 | `--watch` / `--interval S` | live sulla sessione modificata più di recente |
 | `--idle-gap S` | pausa oltre la quale il tempo non è "attivo" (default 300s) |
-| `--no-cache` / `--clear-cache` | ignora / svuota la cache su disco |
+| `--no-cache` / `--clear-cache` | ignora / svuota la cache di analisi ([l'archivio resta](#larchivio-cm-localdb)) |
+| `--dimentica-testo` | cancella dall'archivio il testo delle conversazioni; i numeri restano |
 | `--no-color` | niente ANSI (rispetta anche `NO_COLOR`) |
 
 ---
@@ -102,9 +110,10 @@ Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla 
 
 - **Tessere** in alto: quanto hai pagato, quanto varrebbe a listino, tempo attivo, messaggi,
   sessione in corso e **consumo dei limiti del piano**.
-- Quattro schede: **Progetti**, **Sessioni** (con il titolo che Claude Code assegna alla
-  conversazione), **Mesi** e **Persone**. Colonne ordinabili; l'ordinamento usa i valori
-  numerici, non le stringhe formattate, quindi `$2,055.7` non finisce sotto `$301.4`.
+- Sei schede: **Progetti**, **Sessioni** (con il titolo che Claude Code assegna alla
+  conversazione), **[Traces](#i-turni)**, **[Andamento](#andamenti-e-indicatori)**, **Mesi** e
+  **Persone**. Colonne ordinabili; l'ordinamento usa i valori numerici, non le stringhe
+  formattate, quindi `$2,055.7` non finisce sotto `$301.4`.
 - **Persone** mostra il consumo di più macchine e compare popolata solo se hai avviato il
   [raccoglitore](#più-macchine-il-pannello-di-team). L'intestazione della prima colonna dice
   *Persona*, *Postazione* o *Insieme* a seconda del livello di riservatezza in vigore, così si
@@ -116,6 +125,10 @@ Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla 
   in nessuna riga.
 - **Ogni intestazione ha la sua spiegazione** al passaggio del mouse.
 - **Doppio click su una sessione** apre la conversazione, rileggibile, con export in Markdown.
+- **Doppio click su un turno** nella scheda Traces apre i suoi span: dove è finito il tempo.
+- La **casella di ricerca** cerca nei nomi dei progetti, nei titoli e **nel testo dei tuoi
+  prompt e nei nomi degli strumenti usati**. Una sessione resta visibile anche quando il testo
+  cercato sta solo in uno dei suoi turni.
 - **Live**: la tessera di destra segue la sessione attiva e si aggiorna ogni 2 s leggendo solo
   i byte nuovi del transcript. Diventa verde quando quella sessione sta lavorando.
 - **Aggiornamento automatico ogni 5 minuti**, configurabile.
@@ -124,8 +137,8 @@ Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla 
 Aspetto: superfici piatte, tabella disegnata su Canvas, tema chiaro/scuro che segue il sistema
 (barra del titolo inclusa) e si forza con `--light` / `--dark`.
 
-Opzioni: `--theme auto|light|dark`, `--tab progetti|sessioni|mesi`, `--live`, `--detail <uuid>`,
-`--auto-refresh MIN`, `--locale us|it`.
+Opzioni: `--theme auto|light|dark`, `--tab progetti|sessioni|traces|mesi|persone`, `--live`,
+`--detail <uuid>`, `--auto-refresh MIN`, `--locale us|it`.
 
 Il pulsante **Configura** apre le impostazioni vere, non il file JSON: abbonamento, team,
 aspetto, statusline e listino. Se una modifica richiede il riavvio, l'applicazione si riavvia
@@ -182,17 +195,14 @@ L'esportazione rilegge ogni sessione per intero — il testo non sta nella cache
 i numeri — quindi su molte conversazioni ci vuole qualche minuto. Nella GUI gira su un thread
 separato con avanzamento nella barra di stato, e sopra le 40 conversazioni chiede conferma.
 
-### Dove sono salvate, e serve un database?
+### Dove sono salvate
 
-**No.** Le conversazioni le scrive già Claude Code, un file JSONL per sessione:
+**Le conversazioni non le salva questo strumento**: le scrive già Claude Code, un file JSONL
+per sessione, e qui si leggono in sola lettura.
 
 ```
 %USERPROFILE%\.claude\projects\<progetto>\<uuid>.jsonl
 ```
-
-Questo strumento le legge **in sola lettura**: l'unica cosa che scrive è `.cache.json`, dati
-derivati cancellabili in qualsiasi momento. Un database sarebbe una seconda copia da tenere
-sincronizzata, che si disallinea appena Claude Code cambia formato.
 
 **I transcript però scadono.** Claude Code ha `cleanupPeriodDays`, che cancella quelli più
 vecchi di N giorni. Se vuoi conservarli a lungo, in `~/.claude/settings.json`:
@@ -204,6 +214,249 @@ vecchi di N giorni. Se vuoi conservarli a lungo, in `~/.claude/settings.json`:
 Il costo è lo spazio su disco, che cresce di qualche centinaio di MB al mese di uso intenso.
 Per le conversazioni che ti interessano davvero, l'esportazione in Markdown resta il modo più
 solido: è un file tuo, leggibile senza questo tool e senza Claude Code.
+
+### L'archivio: `cm-local.db`
+
+I **numeri** invece sì: stanno in un SQLite accanto allo script. Fino alla versione precedente
+era `.cache.json`, un blocco unico riscritto per intero e buttato via ogni volta che cambiava
+il formato del parser; al primo avvio viene travasato dentro l'archivio e cancellato.
+
+L'archivio ha due metà con regole opposte, ed è tutto lì:
+
+| tabella | cos'è | si può buttare? |
+|---|---|---|
+| `file` | il record derivato da ogni transcript, con dimensione e data | **sì**: si rilegge |
+| `sessione`, `turno` | quello che si è misurato | **no**, non sempre — vedi sotto |
+
+Ogni sessione dice da dove viene:
+
+- `origine = 'derivato'` — tutti i suoi transcript esistono ancora, la riga si può ricostruire;
+- `origine = 'acquisito'` — ne manca almeno uno (`file_mancanti` dice quanti), oppure la fonte
+  non ha mai avuto un transcript.
+
+Da questa distinzione discende la regola che tiene in piedi il resto: **si cancella e si
+ricostruisce solo ciò che è derivato**. Un cambio di formato del parser svuota la tabella
+`file` e non tocca l'archivio — `--clear-cache` fa la stessa cosa a mano. Il peso di una
+migrazione futura resta così proporzionale ai soli dati che nessuna rilettura potrebbe rifare.
+
+### Le sessioni che sopravvivono al transcript
+
+Quando `cleanupPeriodDays` cancella un transcript, la sua riga in `file` sparisce ma **la
+sessione e i suoi turni restano**, marcati acquisiti — e continuano a comparire nei conti,
+segnati con **▪** nelle schede Sessioni e Traces e nel CLI. Sono l'unica memoria che rimane di
+quel lavoro: senza, il costo di un mese passato calerebbe da solo col tempo.
+
+Aprendole si vede quello che è rimasto:
+
+| | c'è ancora? |
+|---|---|
+| numeri della sessione e dei turni | **sì**, tutti |
+| conversazione | **sì**, se `archivio.testo` era acceso |
+| cascata degli span | **no**: vive nel dettaglio che non si archivia |
+| risultati degli strumenti | **no**, mai archiviati |
+
+Se invece sparisce **solo uno** dei file di una sessione — tipicamente quello di un subagent —
+la sessione continua a essere scansionata e i suoi numeri **calano**, perché quel lavoro non si
+può più leggere e non si inventa. `file_mancanti` dice di quanti file si tratta, così la
+differenza resta spiegabile invece di essere un calo misterioso.
+
+### Archiviare anche il testo
+
+Di default nell'archivio ci sono **solo numeri**, più i primi 200 caratteri dei tuoi prompt per
+riconoscere un turno in un elenco. Il contenuto delle conversazioni si archivia solo se glielo
+chiedi — *Configura → Archivio*, oppure in `config.json`:
+
+```json
+"archivio": { "testo": true }
+```
+
+Ci finiscono **le tue domande e le risposte**, non i risultati degli strumenti: su una sessione
+vera il testo è l'1,6% del transcript e tutto il resto sono contenuti di file e output di
+comandi, già su disco e che nessuno rilegge. Su 227 MB di transcript sono circa 4 MB.
+
+Cosa cambia, acceso:
+
+- **la ricerca entra dentro le risposte**, con un indice a testo pieno (SQLite FTS5, con
+  fallback su `LIKE` se quella copia di SQLite non ce l'ha); si cerca da tre lettere in su;
+- **una conversazione resta leggibile dopo che il suo transcript è sparito**: è l'unico modo
+  per non perderla quando scatta `cleanupPeriodDays`.
+
+Accenderlo fa rileggere tutti i transcript una volta — quelli già in cache erano stati letti
+senza tenere il testo. Spegnerlo non cancella niente: per cancellare c'è
+`python claude_monitor.py --dimentica-testo`, che toglie il testo e lascia i numeri.
+
+Tenere su disco il contenuto delle proprie conversazioni è una decisione, non un default da
+scoprire dopo: per questo è spento, e per questo c'è un modo esplicito per disfarlo.
+
+L'archivio non serve a rendere il monitor veloce — su 227 MB di transcript la rilettura completa
+costa meno di due secondi, perché i file hanno poche righe lunghissime. Serve a **interrogare**
+quello che si è misurato:
+
+```sql
+SELECT substr(session_id,1,8), round(costo,2), richieste, tool, substr(prompt,1,40)
+FROM turno ORDER BY costo DESC LIMIT 10;
+```
+
+e a **conservarlo** quando il transcript non c'è più. `*.db` è già in `.gitignore`.
+
+---
+
+## I turni
+
+Una sessione può durare giorni e costare centinaia di dollari: come unità di misura è troppo
+grossa per capire *dove* siano finiti. Il **turno** — una tua domanda e tutto quello che ne è
+seguito, fino alla domanda dopo — è la grana in cui si lavora davvero.
+
+```bat
+python claude_monitor.py --traces --top 20
+python claude_monitor.py --traces --search riconciliazione
+```
+
+```
+INIZIO       PROGETTO   SESSIONE  DURATA  REQ  TOOL  CACHE  TOKEN  COSTO  MODELLO          PROMPT
+13/08 09:16  gestionale  a1b2c3d4  6m48s   16    15  99.3%  5.28M  $3.46  claude-opus-4-8  sistemare l'export in CSV…
+13/08 08:52  gestionale  a1b2c3d4  1m59s    1     0   8.8%   309k  $2.95  claude-opus-4-8  serve davvero quel servizio…
+```
+
+Le due righe sopra dicono una cosa che il totale di sessione nasconde: il secondo turno è
+costato quasi quanto il primo **con una richiesta sola e nessuno strumento**. La colonna
+`CACHE` spiega perché — 8,8% contro 99,3%: lì il contesto è stato riscritto da capo, e la
+riscrittura si paga il doppio dell'input.
+
+Nella GUI è la scheda **Traces**. Doppio click su un turno apre tre viste:
+
+- **Trace** — token per tipo, costo, cache hit, modelli, strumenti usati, subagent coinvolti;
+- **Conversazione** — cosa è stato detto in *quel* turno, non nell'intera sessione;
+- **Span** — la cascata: la richiesta al modello e ogni strumento, con la sua durata reale.
+
+Dalla scheda Sessioni si scende ai turni di una sola conversazione col pulsante **Vedi i
+turni**; il chip in alto ricorda il filtro e lo toglie con un click.
+
+### Come si ricava la durata di una richiesta
+
+Il transcript non registra quanto è durata una chiamata al modello: scrive solo l'istante in
+cui la risposta è arrivata. Ma l'istante in cui è **partita** è l'ultimo evento precedente — il
+tuo prompt, oppure il risultato dello strumento che l'ha sbloccata. La differenza fra i due è
+l'attesa vera. Gli strumenti invece hanno inizio e fine espliciti: la riga che li invoca e
+quella che ne riporta il risultato.
+
+Ne esce che il tempo di un turno quasi mai se ne va nel modello: se ne va in uno strumento
+fermo ad aspettare un permesso, o in un comando lento. La cascata lo rende evidente.
+
+### Come i turni restano al posto giusto
+
+Il raggruppamento usa il **timestamp**, non la posizione nel file. Non è un dettaglio: Claude
+Code riemette interi segmenti di storia — stesso uuid, stesso timestamp — anche migliaia di
+righe più avanti (fork, `--resume`, compattazione). Raggruppando per posizione quelle righe
+finirebbero nell'ultimo turno, che si prenderebbe il costo di tutta la conversazione.
+
+Tre casi che il codice tratta apposta, e che le prove in `test_traces.py` sorvegliano:
+
+- **I prompt di sidechain non aprono un turno.** Nel transcript principale sono
+  l'orchestratore che istruisce un subagent *dentro* un turno già aperto: aprirne uno nuovo
+  spezzerebbe in due il turno del padre.
+- **I turni dei subagent non sono turni della conversazione.** Il loro consumo viene sommato
+  al turno del padre che li conteneva, così il costo di un turno comprende gli agenti che ha
+  lanciato. La colonna `REQ` li conta.
+- **Le richieste precedenti al primo prompt non si perdono**: finiscono in un turno senza
+  prompt, in testa all'elenco.
+
+Somma di controllo: **il costo dei turni fa esattamente quello della sessione**. Ogni richiesta
+finisce in uno e un solo turno.
+
+### Cache hit
+
+`cache_read / (cache_read + input + cache_write)`: quanta parte di ciò che è entrato nel
+modello arrivava dalla cache invece che a prezzo pieno. L'output resta fuori dal conto — è
+quello che il modello produce, non quello che gli si dà da leggere.
+
+Su una conversazione lunga sta stabilmente sopra il 95%. Un valore basso su un turno singolo
+non è un guasto: è il momento in cui il contesto è stato riscritto, ed è lì che il turno costa.
+
+### Span, e cosa NON c'è
+
+Uno span è un pezzo del turno con un inizio e una fine: la radice `interaction`, un
+`llm_request` per chiamata al modello, un `tool:<nome>` per strumento. Il conteggio in fondo
+alla scheda li somma come fa ProxyAgent.
+
+Gli span **non stanno nell'archivio**: si ricostruiscono rileggendo il transcript quando si apre
+un turno. Tenerli per ogni sessione vorrebbe dire portarsi dietro argomenti e risultati di ogni
+comando — megabyte per un dettaglio che si guarda una volta. Il prezzo è un attimo di attesa
+all'apertura di un turno di una sessione grossa.
+
+**La ricerca** cerca sempre nei tuoi prompt, nei nomi degli strumenti, nei progetti e nei
+titoli. Se hai acceso [`archivio.testo`](#archiviare-anche-il-testo) entra anche **dentro le
+risposte**, con un indice a testo pieno.
+
+---
+
+## Andamenti e indicatori
+
+Totali e classifiche dicono *quanto*. Non dicono se sta crescendo, se sta migliorando, o se
+qualcosa è peggiorato la settimana scorsa. Per quello c'è la scheda **Andamento**, e da riga
+di comando `--trend`.
+
+```bat
+python claude_monitor.py --trend
+python claude_monitor.py --trend --grana mese
+python claude_monitor.py --trend --finestra 7      :: confronta 7 giorni con i 7 prima
+```
+
+```
+PERIODO    VALORE  TURNI   TEMPO  PER TURNO  MEDIANA  CACHE  SESS  PROG  INTER
+22/06       $3.80      8  14h55m    $0.4745      25s  79.1%     1     1
+29/06          $0      0      0s          —        —      —     0     0
+06/07      $38.29     15   3h05m      $2.55    3m14s  98.8%     2     2
+13/07      $172.6     36   9h10m      $4.79    9m11s  98.5%     2     2
+```
+
+Nel pannello la stessa cosa è un grafico — una metrica per volta, scelta da un menu — più una
+riga di **indicatori** che confrontano il periodo recente con quello di pari lunghezza appena
+prima. Il pulsante **Tabella** mostra gli stessi numeri in righe: un grafico senza la sua
+tabella lascia fuori chi non può leggerlo.
+
+### Tre scelte che cambiano quello che si legge
+
+**I periodi vuoti ci sono.** Una settimana senza lavoro vale zero ed è disegnata: saltarla
+accosterebbe due punti lontani e farebbe sembrare continuo un uso che continuo non è stato.
+
+**Le somme si riempiono da zero, i livelli no.** Costo e turni sono quantità: l'area sotto la
+linea *è* la quantità, quindi parte da zero. Cache hit e durata mediana sono livelli: non
+partono da niente, e schiacciarli su un asse 0–100% renderebbe piatta una riga che invece si
+muove. Sono disegnati come linea sola, con l'asse adattato — e **spezzata dove non c'è dato**,
+perché una settimana senza turni non ha una cache hit, e tirarci sopra una linea la farebbe
+sembrare misurata.
+
+**Mai due scale sullo stesso grafico.** Costo e turni non vanno insieme: l'allineamento fra i
+due assi sarebbe arbitrario e inventerebbe una correlazione che nei dati non c'è. Una metrica
+per grafico, si cambia dal menu.
+
+### I rapporti si calcolano sui token, non sulle percentuali
+
+La cache hit di una settimana è `cache_read / token in ingresso` **di tutta la settimana**, non
+la media delle percentuali dei singoli turni. La differenza non è teorica: un turno da mille
+token con cache al 0% e uno da un milione con cache al 99,99% fanno una media del 50% e una
+verità del 99,99%. La media delle percentuali darebbe lo stesso peso ai due turni.
+
+### La freccia si colora solo dove salire vuol dire qualcosa
+
+Ogni indicatore dichiara da che parte sta il bene:
+
+| indicatore | se sale |
+|---|---|
+| Cache hit, Giorni di lavoro, Progetti | **meglio** — verde |
+| Turni interrotti | **peggio** — ambra |
+| Turni, Costo per turno, Durata mediana, Strumenti per turno | **dipende** — grigio |
+
+«Costo per turno» che sale può voler dire che si stanno affrontando lavori più grossi, o che si
+sta sprecando: senza sapere cosa si stava facendo, una freccia verde sarebbe una bugia detta
+con sicurezza. Il colore c'è solo dove il verso è certo; passando il mouse su un indicatore si
+legge cosa vuol dire che salga.
+
+Gli indicatori di **adozione** — giorni di lavoro, progetti toccati, progetti nuovi — rispondono
+alla domanda diversa da «quanto costa»: se lo strumento sta entrando nel lavoro o è rimasto un
+esperimento. Per più postazioni la domanda equivalente è quante di quelle pagate sono attive, e
+quella sta nella [scheda Persone](#più-macchine-il-pannello-di-team).
 
 ---
 
@@ -706,6 +959,10 @@ conversazione include quello dei suoi agenti.
 - **Durata** — `max(timestamp) − min(timestamp)` della sessione.
 - **Attivo** — somma degli intervalli fra eventi consecutivi più corti di `--idle-gap`
   (default 5 min). Distingue "sessione aperta da 3 giorni" da "3 ore di lavoro".
+- **Turni** — [dal tuo prompt al successivo](#i-turni), con durata, richieste, strumenti,
+  cache hit e costo. La durata mediana dice più della media: bastano due sessioni lasciate
+  aperte tutta la notte per spostare la media di ore.
+- **Cache hit** — quota dei token in ingresso arrivati dalla cache invece che a prezzo pieno.
 - **Messaggi** — mostrati come `tuoi / di Claude`. Il secondo è molto più alto perché ogni
   lettura di file, comando o modifica è un messaggio a sé. Non contano come tuoi i
   `tool_result` (che Claude Code registra come messaggi di tipo `user`), i messaggi di sistema
@@ -852,12 +1109,15 @@ GUI, GUI con console, watch in terminale dedicato, riepilogo per progetto come b
 
 ## Prestazioni
 
-La prima analisi legge tutti i transcript (un file può superare i 100 MB) e salva i risultati in
-`.cache.json`, invalidati per file su `(size, mtime)`: le esecuzioni successive sono istantanee.
-`--watch` e la modalità Live usano un parser **incrementale** che legge solo i byte aggiunti.
+La prima analisi legge tutti i transcript (un file può superare i 100 MB) e salva i risultati
+[nell'archivio](#larchivio-cm-localdb), invalidati per file su `(size, mtime)`: le esecuzioni
+successive sono istantanee. `--watch` e la modalità Live usano un parser **incrementale** che
+legge solo i byte aggiunti.
 
-Su un dataset di prova (106 file, 127 MB il maggiore): prima analisi ~1 s a cache disco calda,
-successive ~0,3 s, refresh live ~5 ms.
+Su un dataset di prova (117 file, 227 MB in tutto, 151 MB il maggiore): analisi completa ~1,9 s
+a cache disco calda, successive ~0,35 s, refresh live ~5 ms. La scansione va a ~147 MB/s: i
+transcript sono fatti di poche righe lunghissime, e su poche righe il parser JSON vola. È il
+motivo per cui l'archivio **non** è stato messo per la velocità.
 
 ---
 
@@ -871,12 +1131,22 @@ successive ~0,3 s, refresh live ~5 ms.
 - **I prezzi cambiano**: `config.json` ha un campo `updated`, mostrato in fondo a ogni report.
 - **Righe parziali**: durante lo streaming l'ultima riga del file può essere incompleta. Viene
   saltata senza errori.
+- **La ricerca entra nelle risposte solo se hai acceso
+  [`archivio.testo`](#archiviare-anche-il-testo)**, e solo da quando l'hai acceso: quello che è
+  stato detto prima non è mai passato dall'indice.
+- **Di una sessione archiviata non si ricostruiscono gli span**: la cascata vive nel dettaglio
+  del transcript, che non viene archiviato. Restano i numeri del turno e, se il testo era
+  acceso, la conversazione.
+- **La durata di una richiesta è dedotta**, non misurata: il transcript registra solo l'istante
+  di arrivo della risposta, e l'inizio si ricava dall'evento precedente. Se fra i due c'è
+  dell'altro — un permesso concesso a mano — quel tempo finisce dentro la richiesta.
 - **La telemetria parte da quando l'accendi**: non ha memoria di quello che è successo prima,
   e i mesi già passati restano leggibili solo dai transcript, cioè solo sulla macchina che li
   ha prodotti. Portare lo storico di più macchine in un archivio unico richiederebbe un
   componente sulle postazioni che oggi non c'è.
 - **"Hai pagato" viene da quello che dichiari**, non da una fattura letta: postazioni per quota
-  per mesi coperti dai dati. La riconciliazione con l'export di fatturazione non c'è ancora.
+  per mesi coperti dai dati. Caricando l'export di fatturazione compare accanto la colonna
+  *Fatturato*, che è quello che la console addebita davvero.
 - **Il campo `real_cost` delle sessioni non va sommato per progetto**: è la quota ripartita per
   *mese*, quindi in un mese poco usato un progetto da pochi dollari si prende tutto il canone.
   Per il team la cifra buona è postazioni × quota, che è quella che il pannello mostra.
@@ -901,6 +1171,26 @@ python claude_monitor.py --json --top 0 > dopo.json
 Le due uscite devono differire solo per `generated_at` e per le sessioni cresciute nel frattempo.
 Se tocchi la formula di costo, `node statusline/cm-statusline.js --selftest <uuid>` deve
 coincidere con `python claude_monitor.py --session <uuid>` al centesimo.
+
+Se tocchi gli [andamenti](#andamenti-e-indicatori), `python test_statistiche.py` deve restare
+verde. Guarda i punti in cui una statistica dice una bugia senza accorgersene: che i periodi
+vuoti ci siano e valgano zero, che i rapporti si aggreghino sui token invece che sulle
+percentuali dei singoli turni, che la mediana regga un valore anomalo, che da zero non nasca una
+variazione percentuale, e che solo gli indicatori con un verso certo possano colorarsi.
+
+Se tocchi l'[archivio](#larchivio-cm-localdb), `python test_archivio.py` deve restare verde:
+guarda quasi solo il confine fra le due metà — che un cambio di formato del parser svuoti la
+cache e **non** l'archivio, che un transcript sparito lasci in piedi la sessione con lo stesso
+costo e gli stessi turni, che sparirne solo uno la faccia invece calare dicendo di quanto, e che
+lanciare il monitor su un'altra cartella non poti quello che non ha guardato. Copre anche il
+testo: che resti spento finché non lo si accende, che ogni messaggio finisca nel turno giusto,
+e che `--dimentica-testo` tolga il testo lasciando i numeri.
+
+Se tocchi il [raggruppamento in turni](#i-turni), `python test_traces.py` deve restare verde.
+Costruisce transcript finti sulle tre regole che, sbagliate, non fanno crashare niente — cambiano
+solo i numeri: storia riemessa in coda che deve tornare nel turno in cui è nata, prompt di
+sidechain che non devono aprire un turno, turni di subagent che vanno sommati al padre. Verifica
+anche la somma di controllo: il costo dei turni deve fare esattamente quello della sessione.
 
 Se tocchi il raccoglitore, `python test_collector.py` deve restare verde: copre i punti dove il
 conteggio si sbaglia — invii ritentati, metriche cumulative, totali per gruppo — e il confine di

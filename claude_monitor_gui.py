@@ -37,6 +37,7 @@ import argparse
 import datetime as dt
 import glob
 import json
+import math
 import queue
 import threading
 import time
@@ -46,6 +47,7 @@ import traceback
 from tkinter import filedialog, messagebox
 
 import claude_monitor as cm  # NON chiamare mai cm.init_color(): inietterebbe ANSI
+import cm_statistiche as cm_stat
 
 APP_TITLE = "claude-monitor"
 LIVE_INTERVAL = 2.0
@@ -122,6 +124,9 @@ class Theme:
         self.f_head = tkfont.Font(family=family, size=8, weight="bold")
         self.f_title = tkfont.Font(family=display, size=13, weight="bold")
         self.f_stat = tkfont.Font(family=display, size=21, weight="bold")
+        # Gli indicatori stanno in tessere piu' piccole delle tessere di testa:
+        # lo stesso corpo le farebbe traboccare.
+        self.f_kpi = tkfont.Font(family=display, size=15, weight="bold")
         self.f_mono = tkfont.Font(family="Consolas", size=9)
 
     def __getitem__(self, key):
@@ -211,6 +216,26 @@ class Fmt:
 
 # Valuta dell'abbonamento: impostata all'avvio da pricing.json.
 SUB_CURRENCY = ""
+
+
+def archivio_conteggi() -> dict:
+    """Quanto c'e' dentro l'archivio. {} se non e' apribile: il pannello di
+    configurazione deve aprirsi comunque."""
+    arch = cm.apri_archivio_lettura()
+    if arch is None:
+        return {}
+    try:
+        return arch.conta()
+    except Exception:
+        return {}
+    finally:
+        arch.chiudi()
+
+
+def pct_txt(value: float | None) -> str:
+    if value is None:
+        return "—"
+    return f"{100 * value:.1f}%"
 
 
 def MONEY(value: float) -> str:
@@ -1048,7 +1073,8 @@ PROJECT_COLUMNS = [
 SESSION_COLUMNS = [
     ("project",  "Progetto", 140, "w", lambda r: (r["project"] or "").lower(), lambda r: r["project"]),
     ("title",    "Titolo",   260, "w", lambda r: (r["title"] or r["first_prompt"] or "").lower(),
-     lambda r: r["title"] or r["first_prompt"] or "—"),
+     lambda r: (("▪ " if r.get("archiviata") else "")
+                + (r["title"] or r["first_prompt"] or "—"))),
     ("cost",     "Se fosse API", 105, "e", lambda r: r["cost"], lambda r: Fmt.cost(r["cost"])),
     ("share",    "Quota del consumo", 150, "e", lambda r: r["cost"], lambda r: ""),
     ("start",    "Inizio",    95, "e", lambda r: r["start"] or 0, lambda r: Fmt.time(r["start"])),
@@ -1056,6 +1082,33 @@ SESSION_COLUMNS = [
     ("msgs",     "Messaggi",  90, "e", lambda r: r["assistant_msgs"],
      lambda r: f"{r['user_prompts']}/{r['assistant_msgs']}"),
     ("last",     "Ultima",    80, "e", lambda r: r["end"] or 0, lambda r: Fmt.ago(r["end"])),
+]
+
+# Scheda Traces: una riga per turno, non per sessione. Il turno e' l'unita' in
+# cui si lavora davvero — una domanda e quello che ne e' seguito — e su una
+# sessione lunga giorni e' l'unico taglio che dice dove sono finiti i soldi.
+TRACE_COLUMNS = [
+    ("start",    "Inizio",     85, "e", lambda r: r["ts"] or 0,
+     lambda r: Fmt.time(r["ts"])),
+    ("prompt",   "Turno",     330, "w", lambda r: (r["prompt"] or "").lower(),
+     lambda r: (("⨯ " if r["interrupted"] else "")
+                + ("▪ " if r.get("archiviata") else "")
+                + (r["prompt"] or "(prima del primo prompt)"))),
+    ("project",  "Progetto",  120, "w", lambda r: (r["project"] or "").lower(),
+     lambda r: r["project"]),
+    ("cost",     "Se fosse API", 105, "e", lambda r: r["cost"],
+     lambda r: Fmt.cost(r["cost"])),
+    ("share",    "Quota del consumo", 140, "e", lambda r: r["cost"], lambda r: ""),
+    ("dur",      "Durata",     75, "e", lambda r: r["duration"] or 0,
+     lambda r: Fmt.dur(r["duration"])),
+    ("cache",    "Cache",      65, "e", lambda r: r["cache_hit"] or 0,
+     lambda r: pct_txt(r["cache_hit"])),
+    ("req",      "Req",        50, "e", lambda r: r["requests"], lambda r: r["requests"]),
+    ("tools",    "Tool",       50, "e", lambda r: r["tools"], lambda r: r["tools"]),
+    ("model",    "Modello",   135, "w", lambda r: r["model_label"],
+     lambda r: r["model_label"]),
+    ("session",  "Sessione",   80, "e", lambda r: r["session_id"] or "",
+     lambda r: (r["session_id"] or "")[:8]),
 ]
 
 MONTH_COLUMNS = [
@@ -1221,9 +1274,41 @@ def build_help(pricing: dict, totals: dict) -> dict:
                "sono così tanti da fare la parte più grossa del conto."),
         "start": "Primo messaggio della sessione.",
         "last": "Ultima attività.",
+        "prompt": ("Cosa hai chiesto in questo turno.\n\n"
+                   "Un turno va da una tua domanda alla successiva: comprende "
+                   "tutte le risposte, gli strumenti usati e i subagent lanciati "
+                   "nel frattempo.\n\n"
+                   "⨯ = hai interrotto la risposta a metà."),
+        "dur": ("Dalla domanda all'ultima risposta del turno.\n\n"
+                "Comprende le attese: un permesso da concedere o un comando "
+                "lento allungano il turno quanto il modello che pensa."),
+        "cache": ("Quanta parte di quello che è entrato nel modello arrivava "
+                  "dalla cache invece che a prezzo pieno.\n\n"
+                  "Su una conversazione lunga sta sopra il 95%: è la stessa "
+                  "storia ricaricata a ogni messaggio. Un valore basso vuol dire "
+                  "che il contesto è stato riscritto da capo — è lì che il turno "
+                  "costa."),
+        "req": "Chiamate al modello in questo turno: una per ogni risposta, "
+               "comprese quelle che servivano solo a usare uno strumento.",
+        "tools": "Letture, comandi e modifiche fatte nel turno.",
+        "model": "Modello che ha risposto. «+1» = nel turno ne sono stati usati "
+                 "altri, tipicamente da un subagent.",
+        "session": "Conversazione a cui il turno appartiene: i primi otto "
+                   "caratteri del suo identificativo.",
         "month": "Mese di fatturazione. I messaggi sono attribuiti al mese in cui "
                  "sono avvenuti, quindi una sessione lunga può contare su due mesi.",
     }
+
+# Le schede, in ordine. Il numero e' quello che il selettore usa: tenerlo qui
+# evita che aggiungerne una in mezzo lasci indietro un indice scritto a mano.
+TABS = ["progetti", "sessioni", "traces", "andamento", "mesi", "persone"]
+TAB_BY_NAME = {name: i for i, name in enumerate(TABS)}
+TAB_TRACES = TAB_BY_NAME["traces"]
+TAB_ANDAMENTO = TAB_BY_NAME["andamento"]
+TAB_PERSONE = TAB_BY_NAME["persone"]
+# Schede che scrivono da sole la riga di suggerimento: la legenda generale non
+# deve sovrascriverle.
+TABS_WITH_OWN_HINT = (TAB_BY_NAME["sessioni"], TAB_TRACES, TAB_ANDAMENTO, TAB_PERSONE)
 
 PERIODS = [("Sempre", None), ("Oggi", "oggi"), ("7 giorni", "7d"),
            ("30 giorni", "30d"), ("90 giorni", "90d")]
@@ -1298,6 +1383,10 @@ class DetailWindow(tk.Toplevel):
                           width=100)
         b_md.set_bg(self.t["page"])
         b_md.pack(side="right")
+        b_turni = FlatButton(bar, self.t, "Vedi i turni", command=self.show_traces,
+                             width=96)
+        b_turni.set_bg(self.t["page"])
+        b_turni.pack(side="right", padx=(0, 8))
 
         self.holder = tk.Frame(self, bg=self.t["page"])
         self.holder.pack(fill="both", expand=True, padx=18, pady=(0, 18))
@@ -1318,6 +1407,11 @@ class DetailWindow(tk.Toplevel):
         self.current.pack_forget()
         self.current = self.chat if index == 0 else self.table
         self.current.pack(fill="both", expand=True)
+
+    def show_traces(self):
+        """Dalla sessione ai suoi turni, nella finestra principale."""
+        self.app.show_traces_of(self.session["session_id"])
+        self.app.root.lift()
 
     def export_markdown(self):
         if not self.session_full:
@@ -1345,6 +1439,18 @@ class DetailWindow(tk.Toplevel):
             pricing, base = self.app.pricing, self.app.base
             main = main_transcript_for(base, self.session["session_id"])
             files = cm.session_files_from_transcript(main) if main else self.session["files"]
+            if not files:
+                # Transcript sparito: resta l'archivio, che ha i numeri e — se
+                # e' stato acceso — anche quello che ci si e' detti.
+                sess, messages = cm.conversazione_archiviata(self.session["session_id"])
+                if not sess:
+                    self.q.put(("error", "di questa sessione non resta niente: "
+                                         "il transcript non c'e' piu' e l'archivio "
+                                         "non la conosce", None))
+                    return
+                self.q.put(("chat", sess, messages))
+                self.q.put(("ok", sess, self._righe(messages, pricing)))
+                return
             sess = cm.new_session(self.session["session_id"])
             messages = []
             for path in files:
@@ -1361,21 +1467,26 @@ class DetailWindow(tk.Toplevel):
             messages.sort(key=lambda m: (m["ts"] is None, m["ts"] or 0))
             self.q.put(("chat", sess, messages))
 
-            rows, running = [], 0.0
-            for m in messages:
-                if m["kind"] == "prompt":
-                    rows.append({"ts": m["ts"], "model": "tu", "subagent": False,
-                                 "prompt": True, "tok": cm.new_tok(), "cost": 0.0,
-                                 "cum": running, "what": m["text"][:300]})
-                    continue
-                cost, _ = cm.cost_of(m["model"], m["tok"], pricing)
-                running += cost
-                rows.append({"ts": m["ts"], "model": m["model"], "subagent": m["subagent"],
-                             "prompt": False, "tok": m["tok"], "cost": cost,
-                             "cum": running, "what": ", ".join(dict.fromkeys(m["tools"]))})
-            self.q.put(("ok", sess, rows))
+            self.q.put(("ok", sess, self._righe(messages, pricing)))
         except BaseException:
             self.q.put(("error", traceback.format_exc(), None))
+
+    def _righe(self, messages, pricing):
+        rows, running = [], 0.0
+        for m in messages:
+            if m["kind"] == "prompt":
+                rows.append({"ts": m["ts"], "model": "tu", "subagent": False,
+                             "prompt": True, "tok": cm.new_tok(), "cost": 0.0,
+                             "cum": running, "what": (m.get("text") or "")[:300]})
+                continue
+            cost, _ = cm.cost_of(m.get("model") or "", m["tok"], pricing)
+            running += cost
+            rows.append({"ts": m["ts"], "model": m.get("model") or "—",
+                         "subagent": m.get("subagent", False),
+                         "prompt": False, "tok": m["tok"], "cost": cost,
+                         "cum": running,
+                         "what": ", ".join(dict.fromkeys(m.get("tools") or []))})
+        return rows
 
     def _pump(self):
         try:
@@ -1616,6 +1727,840 @@ class ChatView(tk.Frame):
         t.yview_moveto(0.0)   # si legge dall'inizio: è il percorso fatto
 
 
+def mescola(c1: str, c2: str, quota: float) -> str:
+    """Colore intermedio fra due esadecimali.
+
+    Tk non conosce la trasparenza: un riempimento «al 10%» va calcolato prima,
+    fondendolo con il colore della superficie su cui finisce. Il risultato e' lo
+    stesso, e funziona anche sotto la finestra scura.
+    """
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    m = [round(x + (y - x) * quota) for x, y in zip(a, b)]
+    return "#%02x%02x%02x" % tuple(m)
+
+
+def tacche(minimo: float, massimo: float, quante: int = 4) -> list[float]:
+    """Valori tondi per l'asse: 1, 2, 5 per potenze di dieci.
+
+    Un asse etichettato 0 / 347 / 694 e' leggibile solo da chi l'ha disegnato.
+    """
+    if massimo <= minimo:
+        return [minimo]
+    grezzo = (massimo - minimo) / max(1, quante)
+    esp = math.floor(math.log10(grezzo)) if grezzo > 0 else 0
+    base = 10 ** esp
+    for mult in (1, 2, 2.5, 5, 10):
+        passo = base * mult
+        if grezzo <= passo:
+            break
+    partenza = math.floor(minimo / passo) * passo
+    out, v = [], partenza
+    while v <= massimo + passo * 0.001:
+        if v >= minimo - passo * 0.001:
+            out.append(round(v, 10))
+        v += passo
+    return out or [minimo, massimo]
+
+
+class TrendChart(tk.Frame):
+    """Una metrica nel tempo. Una sola serie, quindi nessuna legenda.
+
+    Le somme si disegnano riempite da zero — l'area *e'* la quantita' — mentre i
+    livelli (cache hit, durate mediane) sono una linea sola con l'asse adattato:
+    riempire un livello da zero direbbe una cosa che non e' vera, e schiacciarlo
+    su uno zero lontano lo renderebbe una riga piatta.
+    """
+
+    PAD_SX, PAD_DX, PAD_SU, PAD_GIU = 62, 74, 26, 30
+
+    def __init__(self, master, theme: Theme, altezza=170):
+        super().__init__(master, bg=theme["surface"], highlightthickness=1,
+                         highlightbackground=theme["border"])
+        self.t = theme
+        self.punti: list[dict] = []
+        self.metrica = cm_stat.METRICHE[0]
+        self.hover = -1
+        self._geo = None
+
+        head = tk.Frame(self, bg=theme["surface"])
+        head.pack(fill="x", padx=18, pady=(14, 0))
+        self.l_title = tk.Label(head, text="", bg=theme["surface"], fg=theme["ink"],
+                                font=theme.f_body_bold, anchor="w")
+        self.l_title.pack(fill="x")
+        self.l_nota = tk.Label(head, text="", bg=theme["surface"], fg=theme["muted"],
+                               font=theme.f_small, anchor="w", justify="left",
+                               wraplength=760)
+        self.l_nota.pack(fill="x", pady=(2, 0))
+
+        self.canvas = tk.Canvas(self, bg=theme["surface"], height=altezza,
+                                highlightthickness=0, bd=0)
+        self.canvas.pack(fill="both", expand=True, padx=4, pady=(6, 4))
+        self.canvas.bind("<Configure>", lambda _e: self._draw())
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", lambda _e: self._set_hover(-1))
+        self.tip = Tooltip(self, theme)
+
+    def set_data(self, punti, metrica):
+        self.punti = list(punti or [])
+        self.metrica = metrica
+        self.l_title.config(text=metrica["label"])
+        self.l_nota.config(text=metrica["nota"])
+        self.hover = -1
+        self._draw()
+
+    # -- disegno ------------------------------------------------------------ #
+
+    def _valori(self):
+        k = self.metrica["key"]
+        return [p.get(k) for p in self.punti]
+
+    def _draw(self):
+        c = self.canvas
+        t = self.t
+        c.delete("all")
+        self._geo = None
+        w = max(c.winfo_width(), 320)
+        h = max(c.winfo_height(), 140)
+        valori = self._valori()
+        reali = [v for v in valori if v is not None]
+        if not reali:
+            c.create_text(self.PAD_SX, h / 2, text="nessun dato nel periodo",
+                          anchor="w", fill=t["muted"], font=t.f_small)
+            return
+
+        parte_da_zero = self.metrica.get("zero", True)
+        vmax = max(reali)
+        vmin = 0.0 if parte_da_zero else min(reali)
+        if vmax == vmin:
+            vmax = vmin + (abs(vmin) or 1) * 0.1
+        if not parte_da_zero:                    # un po' d'aria sopra e sotto
+            margine = (vmax - vmin) * 0.15
+            vmin, vmax = vmin - margine, vmax + margine
+
+        x0, x1 = self.PAD_SX, w - self.PAD_DX
+        y0, y1 = self.PAD_SU, h - self.PAD_GIU
+        if x1 <= x0 or y1 <= y0:
+            return
+
+        def px(i):
+            n = len(valori)
+            return x0 if n < 2 else x0 + (x1 - x0) * i / (n - 1)
+
+        def py(v):
+            return y1 - (y1 - y0) * (v - vmin) / (vmax - vmin)
+
+        # griglia: linee piene di un passo sopra la superficie, mai tratteggiate
+        for v in tacche(vmin, vmax):
+            y = py(v)
+            if not (y0 - 1 <= y <= y1 + 1):
+                continue
+            c.create_line(x0, y, x1, y, fill=t["line"], width=1)
+            c.create_text(x0 - 8, y, text=cm.fmt_stat(v, self.metrica["formato"]),
+                          anchor="e", fill=t["muted"], font=t.f_small)
+
+        # etichette dell'asse dei tempi, diradate finche' non si sovrappongono
+        passo = 1
+        while len(valori) / passo > max(2, (x1 - x0) / 58):
+            passo += 1
+        for i, p in enumerate(self.punti):
+            if i % passo and i != len(self.punti) - 1:
+                continue
+            c.create_text(px(i), y1 + 14, text=p["etichetta"], anchor="n",
+                          fill=t["muted"], font=t.f_small)
+
+        colore = t["accent"]
+        # Tratti separati sui periodi consecutivi che hanno un valore. Un livello
+        # non misurato — una settimana senza turni non ha una «cache hit» — non
+        # va attraversato da una linea: sembrerebbe un dato che non e' mai stato
+        # preso. Le somme invece non hanno buchi: zero e' un valore.
+        tratti, corrente = [], []
+        for i, v in enumerate(valori):
+            if v is None:
+                if corrente:
+                    tratti.append(corrente)
+                corrente = []
+            else:
+                corrente.append((px(i), py(v)))
+        if corrente:
+            tratti.append(corrente)
+
+        if parte_da_zero and tratti:
+            piatto = [p for tratto in tratti for p in tratto]
+            poly = [(piatto[0][0], py(vmin))] + piatto + [(piatto[-1][0], py(vmin))]
+            # l'area e' la quantita': si riempie solo quando la base e' lo zero
+            c.create_polygon([co for xy in poly for co in xy],
+                             fill=mescola(t["surface"], colore, 0.12), outline="")
+        for tratto in tratti:
+            if len(tratto) > 1:
+                c.create_line([co for xy in tratto for co in xy], fill=colore,
+                              width=2, capstyle="round", joinstyle="round")
+            else:
+                x, y = tratto[0]
+                c.create_oval(x - 4, y - 4, x + 4, y + 4, fill=colore,
+                              outline=t["surface"], width=2)
+
+        # Etichette solo dove servono: l'ultimo punto e il massimo. Un numero su
+        # ogni punto non lo legge nessuno.
+        ultimo = len(valori) - 1
+        while ultimo >= 0 and valori[ultimo] is None:
+            ultimo -= 1
+        i_max = max(range(len(valori)),
+                    key=lambda i: (valori[i] is not None, valori[i] or 0))
+        for i, dove in ((ultimo, "fine"), (i_max, "max")):
+            if i < 0 or valori[i] is None:
+                continue
+            x, y = px(i), py(valori[i])
+            c.create_oval(x - 4, y - 4, x + 4, y + 4, fill=colore,
+                          outline=t["surface"], width=2)
+            if dove == "fine":
+                c.create_text(x + 12, y, anchor="w", fill=t["ink"], font=t.f_body_bold,
+                              text=cm.fmt_stat(valori[i], self.metrica["formato"]))
+            elif i != ultimo:
+                c.create_text(x, y - 12, anchor="s", fill=t["ink2"], font=t.f_small,
+                              text=cm.fmt_stat(valori[i], self.metrica["formato"]))
+
+        self._geo = (x0, x1, y0, y1, vmin, vmax)
+
+        if 0 <= self.hover < len(self.punti):
+            i = self.hover
+            c.create_line(px(i), y0, px(i), y1, fill=t["border"], width=1)
+            v = valori[i]
+            if v is not None:
+                x, y = px(i), py(v)
+                c.create_oval(x - 5, y - 5, x + 5, y + 5, fill=colore,
+                              outline=t["surface"], width=2)
+
+    # -- interazione -------------------------------------------------------- #
+
+    def _indice(self, x_px):
+        if not self._geo or len(self.punti) == 0:
+            return -1
+        x0, x1, *_ = self._geo
+        n = len(self.punti)
+        if n == 1:
+            return 0
+        q = (x_px - x0) / max(1e-6, (x1 - x0))
+        i = round(q * (n - 1))
+        return i if 0 <= i < n else -1
+
+    def _set_hover(self, i):
+        if i != self.hover:
+            self.hover = i
+            self._draw()
+            if i < 0:
+                self.tip.hide()
+
+    def _on_motion(self, ev):
+        i = self._indice(ev.x)
+        self._set_hover(i)
+        if i < 0:
+            return
+        p = self.punti[i]
+        v = p.get(self.metrica["key"])
+        testo = (f"{p['etichetta']}\n"
+                 f"{self.metrica['label']}: {cm.fmt_stat(v, self.metrica['formato'])}\n"
+                 f"{p['turni']} turni · {cm.h_cost(p['costo'])} · "
+                 f"{p['progetti']} progetti")
+        self.tip.show(("trend", i), testo,
+                      self.canvas.winfo_rootx() + ev.x + 16,
+                      self.canvas.winfo_rooty() + ev.y + 12)
+
+
+class KpiTile(tk.Frame):
+    """Un indicatore col confronto sul periodo precedente.
+
+    La freccia si colora solo se per quell'indicatore salire vuol dire qualcosa:
+    «cache hit» che sale e' un miglioramento, «costo per turno» che sale non e'
+    ne' l'uno ne' l'altro, e dipingerlo di verde o di rosso sarebbe una bugia
+    detta con sicurezza.
+    """
+
+    def __init__(self, master, theme: Theme, width=176):
+        super().__init__(master, bg=theme["surface"], highlightthickness=1,
+                         highlightbackground=theme["border"])
+        self.t = theme
+        self.configure(width=width, height=96)
+        self.pack_propagate(False)
+        box = tk.Frame(self, bg=theme["surface"])
+        box.pack(fill="both", expand=True, padx=12, pady=10)
+        self.l_label = tk.Label(box, text="", bg=theme["surface"], fg=theme["muted"],
+                                font=theme.f_head, anchor="w", justify="left",
+                                wraplength=width - 24)
+        self.l_label.pack(fill="x")
+        riga = tk.Frame(box, bg=theme["surface"])
+        riga.pack(fill="x", pady=(4, 0))
+        self.l_value = tk.Label(riga, text="—", bg=theme["surface"], fg=theme["ink"],
+                                font=theme.f_kpi, anchor="w")
+        self.l_value.pack(side="left")
+        self.l_delta = tk.Label(riga, text="", bg=theme["surface"], fg=theme["muted"],
+                                font=theme.f_small, anchor="w")
+        self.l_delta.pack(side="left", padx=(6, 0), pady=(5, 0))
+        self.l_prima = tk.Label(box, text="", bg=theme["surface"], fg=theme["muted"],
+                                font=theme.f_small, anchor="w")
+        self.l_prima.pack(fill="x")
+
+    def set(self, k: dict):
+        self.l_label.config(text=k["label"].upper())
+        self.l_value.config(text=cm.fmt_stat(k["valore"], k["formato"]))
+        d = k["delta"]
+        if d is None:
+            self.l_delta.config(text="", fg=self.t["muted"])
+            self.l_prima.config(text="nessun confronto")
+            return
+        freccia = "▲" if d > 0 else ("▼" if d < 0 else "•")
+        if k["verso"]:
+            bene = (d > 0) == (k["verso"] == "su")
+            colore = self.t["good"] if bene else "#eda100"
+        else:
+            colore = self.t["muted"]
+        self.l_delta.config(text=f"{freccia} {abs(100 * d):.0f}%", fg=colore)
+        self.l_prima.config(text=f"prima {cm.fmt_stat(k['precedente'], k['formato'])}")
+
+
+TREND_COLUMNS = [
+    ("etichetta", "Periodo",  100, "w", lambda r: r["inizio"], lambda r: r["etichetta"]),
+    ("costo",     "Valore",   100, "e", lambda r: r["costo"], lambda r: Fmt.cost(r["costo"])),
+    ("turni",     "Turni",     70, "e", lambda r: r["turni"], lambda r: r["turni"]),
+    ("durata_totale", "Tempo", 90, "e", lambda r: r["durata_totale"],
+     lambda r: Fmt.dur(r["durata_totale"])),
+    ("costo_turno", "Per turno", 90, "e", lambda r: r["costo_turno"] or 0,
+     lambda r: cm.fmt_stat(r["costo_turno"], "usd")),
+    ("durata_mediana", "Mediana", 90, "e", lambda r: r["durata_mediana"] or 0,
+     lambda r: cm.fmt_stat(r["durata_mediana"], "dur")),
+    ("cache_hit", "Cache",      75, "e", lambda r: r["cache_hit"] or 0,
+     lambda r: cm.fmt_stat(r["cache_hit"], "pct")),
+    ("sessioni",  "Sess",       60, "e", lambda r: r["sessioni"], lambda r: r["sessioni"]),
+    ("progetti",  "Prog",       60, "e", lambda r: r["progetti"], lambda r: r["progetti"]),
+    ("interrotti", "Interrotti", 85, "e", lambda r: r["interrotti"],
+     lambda r: r["interrotti"] or "—"),
+]
+
+
+class TrendPanel(tk.Frame):
+    """Scheda Andamento: come l'uso cambia nel tempo, e cosa vuol dire.
+
+    Un grafico per volta, con la metrica scelta da un menu: due scale sullo
+    stesso disegno inventerebbero una correlazione che nei dati non c'e'.
+    Il pulsante «Tabella» mostra gli stessi numeri in righe — un grafico senza
+    la sua tabella lascia fuori chi non puo' leggerlo.
+    """
+
+    def __init__(self, master, app):
+        super().__init__(master, bg=app.t["page"])
+        self.app = app
+        self.t = app.t
+        self.punti: list[dict] = []
+        self.kpi: list[dict] = []
+        self.help: dict = {}
+        self.metrica = cm_stat.METRICHE[0]
+        self.grana = None            # None = scelta in base all'intervallo
+        self.mostra_tabella = False
+
+        barra = tk.Frame(self, bg=self.t["page"])
+        barra.pack(fill="x", pady=(0, 8))
+        self.dd_metrica = Dropdown(
+            barra, self.t, [(m["label"], m["key"]) for m in cm_stat.METRICHE],
+            self._on_metrica, width=210)
+        self.dd_metrica.set_bg(self.t["page"])
+        self.dd_metrica.pack(side="left")
+        self.seg_grana = Segmented(
+            barra, self.t, [g[1] for g in cm_stat.GRANULARITA], self._on_grana)
+        self.seg_grana.pack(side="left", padx=(10, 0))
+        self.b_tab = FlatButton(barra, self.t, "Tabella", command=self._toggle,
+                                toggle=True, width=80)
+        self.b_tab.set_bg(self.t["page"])
+        self.b_tab.pack(side="right")
+        self.l_periodo = tk.Label(barra, text="", bg=self.t["page"],
+                                  fg=self.t["muted"], font=self.t.f_small)
+        self.l_periodo.pack(side="right", padx=(0, 12), pady=(6, 0))
+
+        # Gli indicatori si impaccano PRIMA del grafico, dal basso: cosi'
+        # prendono l'altezza che gli serve e il grafico si adatta a quello che
+        # resta. Al contrario, con una finestra bassa, la seconda riga di
+        # tessere finirebbe sotto il bordo senza che niente lo segnali.
+        griglia = tk.Frame(self, bg=self.t["page"])
+        griglia.pack(fill="x", side="bottom")
+        self.l_kpi = tk.Label(self, text="", bg=self.t["page"], fg=self.t["ink2"],
+                              font=self.t.f_small, anchor="w")
+        self.l_kpi.pack(fill="x", side="bottom", pady=(12, 6))
+
+        self.holder = tk.Frame(self, bg=self.t["page"])
+        self.holder.pack(fill="both", expand=True, side="top")
+        self.chart = TrendChart(self.holder, self.t)
+        self.tabella = DataTable(self.holder, self.t, TREND_COLUMNS,
+                                 share_key=lambda r: r["costo"])
+        self.chart.pack(fill="both", expand=True)
+
+        self.tiles = []
+        for i in range(len(cm_stat.INDICATORI)):
+            tile = KpiTile(griglia, self.t)
+            tile.grid(row=i // 5, column=i % 5, padx=(0, 8), pady=(0, 8), sticky="nsew")
+            self.tiles.append(tile)
+        for col in range(5):
+            griglia.columnconfigure(col, weight=1)
+        self.tip = Tooltip(self, self.t)
+        for tile, spec in zip(self.tiles, cm_stat.INDICATORI):
+            self._spiega(tile, spec)
+
+    def _spiega(self, tile, spec):
+        """La spiegazione dell'indicatore al passaggio del mouse, come le colonne."""
+        def entra(_e, s=spec, w=tile):
+            self.tip.show(("kpi", s["key"]), f"{s['label']}\n\n{s['nota']}",
+                          w.winfo_rootx() + 12, w.winfo_rooty() + w.winfo_height() + 6)
+
+        def esce(_e):
+            self.tip.hide()
+
+        for widget in (tile, *tile.winfo_children()):
+            widget.bind("<Enter>", entra, add="+")
+            widget.bind("<Leave>", esce, add="+")
+            for figlio in widget.winfo_children():
+                figlio.bind("<Enter>", entra, add="+")
+                figlio.bind("<Leave>", esce, add="+")
+
+    # -- dati --------------------------------------------------------------- #
+
+    def set_data(self, turni: list[dict]):
+        iv = cm_stat.intervallo(turni)
+        if iv is None:
+            self.punti, self.kpi = [], []
+            self.chart.set_data([], self.metrica)
+            self.tabella.set_rows([])
+            self.tabella.set_placeholder("nessun turno nel periodo scelto")
+            self.l_periodo.config(text="")
+            self.l_kpi.config(text="")
+            for tile in self.tiles:
+                tile.set({"label": "—", "valore": None, "formato": "num",
+                          "delta": None, "verso": None, "precedente": None})
+            return
+
+        grana = self.grana or cm_stat.grana_consigliata(*iv)
+        for i, g in enumerate(cm_stat.GRANULARITA):
+            if g[0] == grana:
+                self.seg_grana.select(i, fire=False)
+        self.punti = cm_stat.serie(turni, grana)
+
+        giorni = {"giorno": 7, "settimana": 28, "mese": 90}[grana]
+        fine = iv[1] + dt.timedelta(days=1)
+        inizio = fine - dt.timedelta(days=giorni)
+        t0 = dt.datetime.combine(inizio, dt.time.min).timestamp()
+        recenti = [t for t in turni if t.get("ts") and t["ts"] >= t0]
+        prec = cm_stat.finestra_precedente(turni, inizio, fine)
+        self.kpi = cm_stat.indicatori(recenti, prec, turni)
+
+        self.l_periodo.config(
+            text=f"dal {iv[0].strftime('%d/%m/%Y')} al {iv[1].strftime('%d/%m/%Y')}")
+        self.l_kpi.config(text=f"Ultimi {giorni} giorni, contro i {giorni} precedenti  ·  "
+                               f"colorato solo dove salire vuol dire qualcosa")
+        self._render()
+
+    def _render(self):
+        self.chart.set_data(self.punti, self.metrica)
+        self.tabella.help = self.help
+        self.tabella.set_rows(list(reversed(self.punti)), {
+            "etichetta": f"{len(self.punti)} periodi",
+            "costo": Fmt.cost(sum(p["costo"] for p in self.punti)),
+            "turni": sum(p["turni"] for p in self.punti),
+            "durata_totale": Fmt.dur(sum(p["durata_totale"] for p in self.punti)),
+            "interrotti": sum(p["interrotti"] for p in self.punti) or "—",
+        })
+        for tile, k in zip(self.tiles, self.kpi):
+            tile.set(k)
+
+    # -- comandi ------------------------------------------------------------ #
+
+    def _on_metrica(self, key):
+        self.metrica = cm_stat.METRICA[key]
+        self.chart.set_data(self.punti, self.metrica)
+
+    def _on_grana(self, index):
+        scelta = cm_stat.GRANULARITA[index][0]
+        if scelta == self.grana:
+            return
+        self.grana = scelta
+        self.app.aggiorna_andamento()
+
+    def _toggle(self):
+        """Il grafico e la sua tabella sono la stessa cosa detta in due modi."""
+        self.mostra_tabella = not self.mostra_tabella
+        self.chart.pack_forget()
+        self.tabella.pack_forget()
+        if self.mostra_tabella:
+            self.tabella.pack(fill="both", expand=True)
+            # nella tabella ci sono tutte le metriche insieme: sceglierne una
+            # non vorrebbe dire niente
+            self.dd_metrica.pack_forget()
+        else:
+            self.chart.pack(fill="both", expand=True)
+            self.dd_metrica.pack(side="left", before=self.seg_grana)
+
+    def selected_tsv(self) -> str:
+        return self.tabella.selected_tsv() if self.mostra_tabella else ""
+
+
+class SpanView(tk.Frame):
+    """La cascata di un turno: chi ha aspettato chi, e per quanto.
+
+    Ogni barra sta sull'asse dei tempi del turno, quindi la lunghezza si legge
+    come attesa e la posizione come "quando". E' l'unica vista che mostra dove
+    se ne va il tempo: quasi mai nel modello, quasi sempre in uno strumento
+    fermo ad aspettare un permesso o un comando lento.
+    """
+
+    ROW = 22
+    NAME_W = 230
+    DUR_W = 70
+
+    def __init__(self, master, theme: Theme):
+        super().__init__(master, bg=theme["surface"], highlightthickness=1,
+                         highlightbackground=theme["border"])
+        self.t = theme
+        self.spans: list[dict] = []
+        self.hover = -1
+        self.selected = -1
+
+        top = tk.Frame(self, bg=theme["surface"])
+        top.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(top, bg=theme["surface"], highlightthickness=0, bd=0)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.bar = tk.Scrollbar(top, orient="vertical", command=self.canvas.yview,
+                                width=10, bd=0, relief="flat",
+                                troughcolor=theme["surface"], bg=theme["border"],
+                                highlightthickness=0)
+        self.bar.pack(side="right", fill="y")
+        self.canvas.configure(yscrollcommand=self.bar.set)
+
+        self.detail = tk.Text(self, bg=theme["raised"], fg=theme["ink2"], bd=0,
+                              relief="flat", wrap="word", font=theme.f_mono,
+                              padx=14, pady=10, height=8, highlightthickness=0,
+                              cursor="arrow")
+        self.detail.tag_configure("head", foreground=theme["ink"],
+                                  font=theme.f_body_bold)
+        self.detail.tag_configure("note", foreground=theme["muted"],
+                                  font=theme.f_small)
+        self.detail.configure(state="disabled")
+
+        self.canvas.bind("<Configure>", lambda _e: self._redraw())
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", lambda _e: self._set_hover(-1))
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<MouseWheel>", self._on_wheel)
+
+    def set_placeholder(self, msg):
+        self.spans = []
+        self._placeholder = msg
+        self._redraw()
+
+    def set_spans(self, spans):
+        self.spans = list(spans or [])
+        self.selected = 0 if self.spans else -1
+        self._redraw()
+        self._show_detail()
+
+    # -- disegno ------------------------------------------------------------ #
+
+    def _color(self, span):
+        t = self.t
+        if not span.get("ok", True):
+            return "#e34948"
+        return {"interaction": t["accent"], "llm": "#7c5cd6"}.get(
+            span["type"], t["good"])
+
+    def _redraw(self):
+        c = self.canvas
+        t = self.t
+        c.delete("all")
+        width = max(c.winfo_width(), 400)
+        if not self.spans:
+            c.create_text(16, 18, text=getattr(self, "_placeholder", "nessuno span"),
+                          anchor="w", fill=t["muted"], font=t.f_small)
+            c.configure(scrollregion=(0, 0, width, 40))
+            return
+
+        root = self.spans[0]
+        t0 = root.get("start")
+        span_s = root.get("duration") or 0.0
+        track_x = self.NAME_W + self.DUR_W + 16
+        track_w = max(60, width - track_x - 20)
+
+        for i, s in enumerate(self.spans):
+            y = 8 + i * self.ROW
+            mid = y + self.ROW // 2 - 4
+            if i == self.selected:
+                c.create_rectangle(0, y - 2, width, y + self.ROW - 4,
+                                   fill=t["sel"], outline="")
+            elif i == self.hover:
+                c.create_rectangle(0, y - 2, width, y + self.ROW - 4,
+                                   fill=t["hover"], outline="")
+            name = ("    " * s["depth"]) + s["name"]
+            c.create_text(12, mid, text=self._clip(name, self.NAME_W - 16),
+                          anchor="w", font=t.f_small,
+                          fill=t["ink"] if s["depth"] == 0 else t["ink2"])
+            c.create_text(self.NAME_W + self.DUR_W, mid,
+                          text=Fmt.dur(s.get("duration")), anchor="e",
+                          font=t.f_small, fill=t["ink2"])
+            c.create_line(track_x, mid, track_x + track_w, mid,
+                          fill=t["track"], width=1)
+            if s.get("start") is None or not span_s:
+                continue
+            a = (s["start"] - t0) / span_s
+            b = ((s.get("end") or s["start"]) - t0) / span_s
+            x1 = track_x + track_w * max(0.0, min(1.0, a))
+            x2 = track_x + track_w * max(0.0, min(1.0, b))
+            round_rect(c, x1, mid - 4, max(x2, x1 + 2), mid + 4, 3,
+                       fill=self._color(s), outline="")
+
+        height = 16 + len(self.spans) * self.ROW
+        c.configure(scrollregion=(0, 0, width, height))
+
+    def _clip(self, text, width):
+        f = self.t.f_small
+        if f.measure(text) <= width:
+            return text
+        while text and f.measure(text + "…") > width:
+            text = text[:-1]
+        return text + "…"
+
+    def _show_detail(self):
+        d = self.detail
+        d.configure(state="normal")
+        d.delete("1.0", "end")
+        if not (0 <= self.selected < len(self.spans)):
+            d.insert("end", "clicca uno span per vederne il contenuto\n", "note")
+            d.configure(state="disabled")
+            d.pack_forget()
+            return
+        s = self.spans[self.selected]
+        head = s["name"]
+        bits = [Fmt.dur(s.get("duration"))]
+        if s.get("model"):
+            bits.append(s["model"])
+        if s.get("cost"):
+            bits.append(Fmt.cost(s["cost"]))
+        if s.get("subagent"):
+            bits.append("subagent")
+        if not s.get("ok", True):
+            bits.append("fallito")
+        d.insert("end", head + "   " + "  ·  ".join(bits) + "\n", "head")
+        if s.get("args"):
+            d.insert("end", "\n" + s["args"] + "\n")
+        body = (s.get("detail") or "").strip()
+        d.insert("end", "\n" + (body or "(nessun testo)") + "\n")
+        d.configure(state="disabled")
+        d.pack(fill="x", side="bottom")
+        d.yview_moveto(0.0)
+
+    # -- interazione -------------------------------------------------------- #
+
+    def _row_at(self, event):
+        y = self.canvas.canvasy(event.y)
+        i = int((y - 8) // self.ROW)
+        return i if 0 <= i < len(self.spans) else -1
+
+    def _set_hover(self, index):
+        if index != self.hover:
+            self.hover = index
+            self._redraw()
+
+    def _on_motion(self, event):
+        self._set_hover(self._row_at(event))
+
+    def _on_click(self, event):
+        i = self._row_at(event)
+        if i >= 0:
+            self.selected = i
+            self._redraw()
+            self._show_detail()
+
+    def _on_wheel(self, event):
+        self.canvas.yview_scroll(int(-event.delta / 120), "units")
+
+
+class TraceWindow(tk.Toplevel):
+    """Un turno letto a fondo: i numeri, la conversazione, la cascata.
+
+    Le tre schede sono le stesse di ProxyAgent, per una ragione: sono le tre
+    domande che ci si fa davanti a un turno costato piu' del previsto — quanto,
+    cosa e' stato detto, dove se n'e' andato il tempo.
+    """
+
+    def __init__(self, app, row: dict):
+        super().__init__(app.root, bg=app.t["page"])
+        self.app = app
+        self.t = app.t
+        self.row = row
+        sid = (row.get("session_id") or "")[:8]
+        self.title(f"{APP_TITLE} — turno {row['n']} · {row.get('project') or '?'} · {sid}")
+        self.geometry("1080x680")
+        self.q: queue.Queue = queue.Queue()
+        set_titlebar(self, self.t.mode == "dark")
+
+        head = tk.Frame(self, bg=self.t["page"])
+        head.pack(fill="x", padx=18, pady=(16, 10))
+        self.l_title = tk.Label(head, text=row.get("prompt") or "(prima del primo prompt)",
+                                bg=self.t["page"], fg=self.t["ink"], font=self.t.f_title,
+                                anchor="w", justify="left", wraplength=1000)
+        self.l_title.pack(fill="x")
+        self.l_meta = tk.Label(head, text="caricamento…", bg=self.t["page"],
+                               fg=self.t["ink2"], font=self.t.f_small,
+                               anchor="w", justify="left")
+        self.l_meta.pack(fill="x", pady=(3, 0))
+
+        tiles = tk.Frame(self, bg=self.t["page"])
+        tiles.pack(fill="x", padx=18)
+        self.tiles = {}
+        for key, label in (("cost", "Se fosse API"), ("dur", "Durata"),
+                           ("cache", "Cache hit"), ("req", "Richieste"),
+                           ("spans", "Span")):
+            tile = StatTile(tiles, self.t, label, width=150)
+            tile.pack(side="left", padx=(0, 10))
+            self.tiles[key] = tile
+
+        bar = tk.Frame(self, bg=self.t["page"])
+        bar.pack(fill="x", padx=18, pady=(14, 8))
+        self.seg = Segmented(bar, self.t, ["Trace", "Conversazione", "Span"],
+                             self._on_view)
+        self.seg.pack(side="left")
+        self.l_hint = tk.Label(bar, text="", bg=self.t["page"], fg=self.t["muted"],
+                               font=self.t.f_small)
+        self.l_hint.pack(side="right", pady=(6, 0))
+
+        self.holder = tk.Frame(self, bg=self.t["page"])
+        self.holder.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+
+        self.facts = tk.Text(self.holder, bg=self.t["surface"], fg=self.t["ink"],
+                             bd=0, relief="flat", wrap="none", font=self.t.f_body,
+                             padx=22, pady=16, highlightthickness=1,
+                             highlightbackground=self.t["border"], cursor="arrow")
+        self.facts.tag_configure("k", foreground=self.t["ink2"])
+        self.facts.tag_configure("v", foreground=self.t["ink"],
+                                 font=self.t.f_body_bold)
+        self.facts.tag_configure("note", foreground=self.t["muted"],
+                                 font=self.t.f_small)
+        self.facts.insert("end", "caricamento…\n", "note")
+        self.facts.configure(state="disabled")
+        self.chat = ChatView(self.holder, self.t)
+        self.chat.set_placeholder("caricamento…")
+        self.spans_view = SpanView(self.holder, self.t)
+        self.spans_view.set_placeholder("caricamento…")
+
+        self.facts.pack(fill="both", expand=True)
+        self.current = self.facts
+
+        threading.Thread(target=self._worker, daemon=True).start()
+        self.after(PUMP_MS, self._pump)
+
+    def _on_view(self, index):
+        self.current.pack_forget()
+        self.current = (self.facts, self.chat, self.spans_view)[index]
+        self.current.pack(fill="both", expand=True)
+        self.l_hint.config(text="clicca uno span per vederne il contenuto"
+                                if index == 2 else "")
+
+    def _worker(self):
+        try:
+            sess, trace, spans, msgs = cm.load_trace(
+                self.app.base, self.row["session_id"], self.row["n"],
+                self.app.pricing, self.app.idle_gap)
+            self.q.put(("ok", (sess, trace, spans, msgs)))
+        except BaseException:
+            self.q.put(("error", traceback.format_exc()))
+
+    def _pump(self):
+        try:
+            kind, payload = self.q.get_nowait()
+        except queue.Empty:
+            self.after(PUMP_MS, self._pump)
+            return
+        if kind == "error":
+            self.l_meta.config(text=(payload or "").strip().splitlines()[-1])
+            self.chat.set_placeholder("non sono riuscito a rileggere il turno")
+            self.spans_view.set_placeholder("non sono riuscito a rileggere il turno")
+            return
+        sess, trace, spans, msgs = payload
+        if not trace:
+            self.l_meta.config(text="turno non piu' presente nel transcript")
+            self.spans_view.set_placeholder("turno non trovato")
+            return
+        self._render(sess, trace, spans, msgs)
+
+    def _render(self, sess, trace, spans, msgs):
+        self.l_title.config(text=trace.get("prompt") or "(prima del primo prompt)")
+        self.l_meta.config(text=(
+            f"{sess.get('project') or '?'}   ·   sessione {sess['session_id'][:8]}"
+            f"   ·   turno {trace['n']} di {sess.get('traces_n', 0)}"
+            f"   ·   {cm.h_time(trace['ts'], '%d/%m/%Y %H:%M:%S')}"
+            + ("   ·   interrotto da te" if trace["interrupted"] else "")
+            + (f"   ·   {trace['subagents']} subagent" if trace["subagents"] else "")))
+
+        notional = cm.cost_columns(self.app.pricing)[1] is not None
+        self.tiles["cost"].set(Fmt.cost(trace["cost"]),
+                               "non pagato" if notional else "addebito reale")
+        self.tiles["dur"].set(Fmt.dur(trace["duration"]),
+                              f"mediana della sessione {Fmt.dur(sess.get('turn_median'))}")
+        self.tiles["cache"].set(pct_txt(trace["cache_hit"]), "dei token in ingresso")
+        self.tiles["req"].set(str(trace["requests"]), f"{trace['tools']} chiamate a tool")
+        self.tiles["spans"].set(str(trace["spans"]),
+                                f"{len(spans)} ricostruiti" if spans
+                                else "non ricostruibili")
+
+        tok = trace["tokens"]
+        righe = [
+            ("Modelli", ", ".join(sorted(trace["per_model"])) or "—"),
+            ("Inizio", cm.h_time(trace["ts"], "%d/%m/%Y %H:%M:%S")),
+            ("Fine", cm.h_time(trace["end"], "%d/%m/%Y %H:%M:%S")),
+            ("Durata", Fmt.dur(trace["duration"])),
+            ("", ""),
+            ("Token input", f"{tok['input']:,}".replace(",", ".")),
+            ("Token output", f"{tok['output']:,}".replace(",", ".")),
+            ("Cache scritta 5m", f"{tok['cache_w5m']:,}".replace(",", ".")),
+            ("Cache scritta 1h", f"{tok['cache_w1h']:,}".replace(",", ".")),
+            ("Cache riletta", f"{tok['cache_read']:,}".replace(",", ".")),
+            ("Cache hit", pct_txt(trace["cache_hit"])),
+            ("", ""),
+            ("Richieste al modello", str(trace["requests"])),
+            ("Chiamate a strumenti", str(trace["tools"])),
+            ("Strumenti usati", ", ".join(trace["tool_names"]) or "—"),
+            ("Subagent coinvolti", str(trace["subagents"]) if trace["subagents"] else "—"),
+            ("Interrotto", "si', la risposta in corso e' stata fermata"
+                           if trace["interrupted"] else "no"),
+            ("", ""),
+            ("Sessione", sess["session_id"]),
+            ("Progetto", sess.get("cwd") or sess.get("project") or "—"),
+        ]
+        f = self.facts
+        f.configure(state="normal")
+        f.delete("1.0", "end")
+        for k, v in righe:
+            if not k:
+                f.insert("end", "\n")
+                continue
+            f.insert("end", f"{k:<24}", "k")
+            f.insert("end", f"{v}\n", "v")
+        if trace["subagents"]:
+            f.insert("end", "\nIl consumo dei subagent e' gia' dentro questi numeri: "
+                            "hanno lavorato dentro questo turno.\n", "note")
+        f.configure(state="disabled")
+
+        if msgs:
+            self.chat.render(msgs)
+        else:
+            self.chat.set_placeholder(
+                "il transcript non c'è più e il testo non era archiviato.\n\n"
+                "Con «archivio.testo» acceso in config.json, le conversazioni "
+                "restano leggibili anche dopo che Claude Code ha cancellato i "
+                "transcript vecchi.")
+        if spans:
+            self.spans_view.set_spans(spans)
+        else:
+            # Gli span vivono nel dettaglio che non si archivia: senza il
+            # transcript non c'è da cosa ricostruirli.
+            self.spans_view.set_placeholder(
+                "gli span si ricostruiscono dal transcript, che per questa "
+                "sessione non c'è più: restano i numeri del turno.")
+
+
 PERSON_PROJECT_COLUMNS = [
     ("project",  "Progetto",   210, "w", lambda r: (r["project"] or "").lower(),
      lambda r: r["project"]),
@@ -1753,7 +2698,8 @@ class SettingsWindow(tk.Toplevel):
         self.body.pack(fill="both", expand=True, padx=18, pady=(10, 0))
         # Un solo elenco: i segmenti e le pagine si indicizzano dallo stesso posto,
         # altrimenti aggiungerne uno sposta il contenuto di tutti quelli dopo.
-        self.page_names = ["Abbonamento", "Team", "Aspetto", "Statusline", "Listino"]
+        self.page_names = ["Abbonamento", "Team", "Archivio", "Aspetto",
+                           "Statusline", "Listino"]
         self.seg = Segmented(nav, self.t, self.page_names, self._show_page)
 
         # ---- Abbonamento
@@ -1826,6 +2772,37 @@ class SettingsWindow(tk.Toplevel):
                          "    python cm_collector.py --privacy aggregato|pseudonimo|nominativo",
                  bg=self.t["surface"], fg=self.t["muted"], font=self.t.f_small,
                  anchor="w", justify="left").pack(fill="x")
+
+        # ---- Aspetto
+        # ---- Archivio
+        p = self._page("Archivio")
+        arch = self.app.pricing.get("archivio") or {}
+        conteggi = archivio_conteggi()
+        tk.Label(p, text=(
+            "I numeri di sessioni e turni finiscono sempre in cm-local.db: servono a "
+            "rileggerli senza riscansionare, e a non perderli quando Claude Code "
+            "cancella i transcript vecchi."
+            + (f"\n\nAdesso contiene {conteggi['sessioni']} sessioni e "
+               f"{conteggi['turni']} turni"
+               + (f", di cui {conteggi['acquisite']} senza più il transcript"
+                  if conteggi["acquisite"] else "")
+               + (f". Testo archiviato: {conteggi['messaggi']} messaggi."
+                  if conteggi["messaggi"] else ".")
+               if conteggi else "")),
+            bg=self.t["surface"], fg=self.t["ink2"], font=self.t.f_small,
+            anchor="w", justify="left", wraplength=560).pack(fill="x", pady=(0, 14))
+        self.t_testo = ToggleRow(p, self.t, "Archivia il testo delle conversazioni",
+                                 bool(arch.get("testo", False)))
+        tk.Label(p, text=(
+            "Le tue domande e le risposte — non i risultati degli strumenti. "
+            "Acceso, una conversazione resta leggibile e cercabile anche dopo che il "
+            "suo transcript è sparito, e la ricerca entra dentro le risposte.\n\n"
+            "Vuol dire tenere quel testo su disco: è una decisione, per questo è "
+            "spento di default. Accendendolo, i transcript vengono riletti una volta. "
+            "Per tornare indietro e cancellare quello che è stato archiviato: "
+            "python claude_monitor.py --dimentica-testo"),
+            bg=self.t["surface"], fg=self.t["muted"], font=self.t.f_small,
+            anchor="w", justify="left", wraplength=560).pack(fill="x", pady=(8, 0))
 
         # ---- Aspetto
         p = self._page("Aspetto")
@@ -2003,6 +2980,7 @@ class SettingsWindow(tk.Toplevel):
             "seats": seats, "fee_per_seat": fee,
             "currency": self.f_tcur.get(), "db": self.f_tdb.get().strip() or None,
         })
+        raw.setdefault("archivio", {})["testo"] = self.t_testo.get()
         raw.setdefault("defaults", {}).update({
             "theme": self.f_theme.get(), "locale": self.f_locale.get(),
             "auto_refresh_minutes": auto, "idle_gap": idle,
@@ -2073,6 +3051,11 @@ class App:
         self.team_rows: list[dict] = []
         self.team_hint = ""
         self.team_summary: dict = {}
+        # Scheda Traces: i turni delle sessioni filtrate, con l'eventuale
+        # drill-down su una sola sessione.
+        self.trace_rows: list[dict] = []
+        self.trace_hint = ""
+        self.trace_session: str | None = None
         self.live_stop: threading.Event | None = None
         self.live_gen = 0
         self.period_spec = None
@@ -2113,8 +3096,8 @@ class App:
                 self.dd_billing.value = label
                 self.dd_billing.set_text(label + "  ▾")
         tab = getattr(args, "tab", None)
-        if tab in ("sessioni", "mesi"):
-            self.segmented.select(1 if tab == "sessioni" else 2)
+        if tab in TAB_BY_NAME:
+            self.segmented.select(TAB_BY_NAME[tab])
 
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         root.bind("<F5>", lambda e: self.refresh())
@@ -2213,7 +3196,8 @@ class App:
         self.menu_export.add_command(label="Dati in JSON…", command=self.export_json)
         self.menu_export.add_command(label="Riepilogo del team in Markdown…",
                                      command=self.export_relazione)
-        self.search = SearchBox(right, t, "filtra progetto", self._on_search, width=140)
+        self.search = SearchBox(right, t, "cerca progetto, turno, strumento",
+                                self._on_search, width=200)
         self.search.pack(side="right", padx=(6, 0))
         self.dd_period = Dropdown(right, t, PERIODS, self._on_period, width=104)
         self.dd_period.set_bg(t["page"])
@@ -2245,9 +3229,15 @@ class App:
         # ---- selettore + tabelle
         bar = tk.Frame(root, bg=t["page"])
         bar.pack(fill="x", padx=20, pady=(10, 8))
-        self.segmented = Segmented(bar, t, ["Progetti", "Sessioni", "Mesi", "Persone"],
+        self.segmented = Segmented(bar, t, ["Progetti", "Sessioni", "Traces",
+                                            "Andamento", "Mesi", "Persone"],
                                    self._on_tab)
         self.segmented.pack(side="left")
+        # Chip di drill-down: si accende quando si arriva ai turni da una
+        # sessione, e si spegne cliccandolo. Senza, dalla scheda Traces non si
+        # capisce piu' perche' si stiano vedendo solo quei turni.
+        self.chip = FlatButton(bar, t, "", command=self._clear_trace_session, width=200)
+        self.chip.set_bg(t["page"])
         self.l_hint = tk.Label(bar, text="doppio click su una sessione per il dettaglio",
                                bg=t["page"], fg=t["muted"], font=t.f_small)
         self.l_hint.pack(side="right", pady=(6, 0))
@@ -2260,6 +3250,10 @@ class App:
         self.sessions_tbl = DataTable(holder, t, SESSION_COLUMNS,
                                       on_activate=self.open_detail,
                                       share_key=lambda r: r["cost"])
+        self.traces_tbl = DataTable(holder, t, TRACE_COLUMNS,
+                                    on_activate=self.open_trace,
+                                    share_key=lambda r: r["cost"])
+        self.trend = TrendPanel(holder, self)
         self.months_tbl = DataTable(holder, t, MONTH_COLUMNS,
                                     share_key=lambda r: r["hyp"])
         self.team_tbl = DataTable(holder, t, TEAM_COLUMNS,
@@ -2268,8 +3262,8 @@ class App:
         self.holder = holder
         self.projects.pack(fill="both", expand=True)
         self.current_table = self.projects
-        self._tables = (self.projects, self.sessions_tbl,
-                        self.months_tbl, self.team_tbl)
+        self._tables = (self.projects, self.sessions_tbl, self.traces_tbl,
+                        self.trend, self.months_tbl, self.team_tbl)
         assert len(self._tables) == len(self.segmented.buttons), (
             "segmenti e tabelle non coincidono: "
             f"{len(self.segmented.buttons)} contro {len(self._tables)}")
@@ -2290,11 +3284,38 @@ class App:
         self.current_table.pack(fill="both", expand=True)
         if index == 1:
             hint = "doppio click su una sessione per il dettaglio"
-        elif index == 3:
+        elif index == TAB_TRACES:
+            hint = self.trace_hint or "doppio click su un turno per gli span"
+        elif index == TAB_ANDAMENTO:
+            hint = ("passa il mouse su un indicatore per sapere cosa vuol dire "
+                    "che salga  ·  «Tabella» per gli stessi numeri in righe")
+        elif index == TAB_PERSONE:
             hint = self.team_hint or "doppio click su una postazione per i suoi progetti"
         else:
             hint = getattr(self, "legend", "")
         self.l_hint.config(text=hint)
+        self._sync_chip(index)
+
+    def _sync_chip(self, index=None):
+        """Il chip vive solo nella scheda Traces, e solo se il filtro e' acceso."""
+        if index is None:
+            index = self.segmented.index
+        if index == TAB_TRACES and self.trace_session:
+            self.chip.set_text(f"Sessione: {self.trace_session[:8]}   ✕")
+            self.chip.pack(side="left", padx=(10, 0))
+        else:
+            self.chip.pack_forget()
+
+    def _clear_trace_session(self):
+        self.trace_session = None
+        self._sync_chip()
+        self.apply_filters()
+
+    def show_traces_of(self, session_id: str):
+        """Dalla sessione ai suoi turni: il drill-down che ProxyAgent fa col chip."""
+        self.trace_session = session_id
+        self.segmented.select(TAB_TRACES)
+        self.apply_filters()
 
     def _set_progress(self, frac):
         """Barra sottile visibile solo durante la scansione: a riposo sparisce."""
@@ -2573,7 +3594,7 @@ class App:
         self.legend = ("sei a consumo: il prezzo dei token è l'addebito" if api else
                        "passa il mouse sulle intestazioni per la spiegazione  ·  "
                        "qui si misura il consumo, i soldi veri sono nella scheda Mesi")
-        if self.segmented.index != 1:
+        if self.segmented.index not in TABS_WITH_OWN_HINT:
             self.l_hint.config(text=self.legend)
 
     def _on_search(self, _value):
@@ -2590,10 +3611,30 @@ class App:
             if since:
                 rows = [s for s in rows if (s["end"] or 0) >= since]
         needle = (self.project_filter or "").strip().lower()
+        # Turni trovati cercando nel testo archiviato: se il testo non e'
+        # archiviato l'insieme e' vuoto e non cambia niente.
+        self.trace_hits = cm.cerca_nel_testo(needle) if needle else set()
+        sessioni_col_testo = {sid for sid, _n in self.trace_hits}
         if needle:
-            rows = [s for s in rows
-                    if needle in (s["project"] or "").lower()
-                    or needle in (s["cwd"] or "").lower()]
+            # La ricerca vale su tutte le schede, ognuna alla sua grana: una
+            # sessione resta se il testo e' nel suo nome, oppure se lo e' in uno
+            # dei suoi turni. Cercare "riconciliazione" e vedere sparire la
+            # sessione che ne parla, solo perche' il progetto si chiama
+            # altrimenti, sarebbe la ricerca sbagliata.
+            def matches(s):
+                if s.get("session_id") in sessioni_col_testo:
+                    return True
+                for field in ("project", "cwd", "title", "first_prompt"):
+                    if needle in (s.get(field) or "").lower():
+                        return True
+                for tr in s.get("traces") or []:
+                    if needle in (tr.get("prompt") or "").lower():
+                        return True
+                    if any(needle in n.lower() for n in tr.get("tool_names") or ()):
+                        return True
+                return False
+
+            rows = [s for s in rows if matches(s)]
         rows = [s for s in rows if s["assistant_msgs"] or s["user_prompts"]]
         self.filtered = rows
 
@@ -2618,6 +3659,11 @@ class App:
             "msgs": f"{sum(r['user_prompts'] for r in rows)}/"
                     f"{sum(r['assistant_msgs'] for r in rows)}",
         })
+
+        self._render_traces(rows, needle)
+        # Gli andamenti guardano la stessa fetta di dati di tutto il resto: un
+        # grafico che ignora il filtro attivo racconta un'altra storia.
+        self.trend.set_data(self.trace_rows)
 
         help_texts = build_help(self.pricing, {"real": tot_real})
         for table in self._tables:
@@ -2651,14 +3697,69 @@ class App:
             self.tiles["cost"].set(Fmt.cost(total),
                                    f"non pagato · {resa:.1f}× di quello che paghi"
                                    if resa else "non pagato")
-        self.tiles["active"].set(Fmt.dur(active),
-                                 f"su {Fmt.dur(duration)} totali")
+        self.tiles["active"].set(Fmt.dur(active), f"su {Fmt.dur(duration)} totali")
+        # "turni" invece di "tuoi": e' lo stesso numero — un turno comincia
+        # quando parli tu — ma dice anche cos'e' una riga della scheda Traces.
+        # Durata mediana e cache hit stanno li', dove c'e' spazio per spiegarle.
         self.tiles["msgs"].set(f"{amsg:,}".replace(",", "."),
-                               f"{umsg} tuoi · {sum(r['tool_calls'] for r in rows)} tool")
+                               f"{umsg} turni · {sum(r['tool_calls'] for r in rows)} tool")
         scope = self.dd_period.value.lower()
         if needle:
             scope += f" · {needle}"
         self.l_scope.config(text=scope)
+
+    def aggiorna_andamento(self):
+        """Ricalcola solo gli andamenti: cambiare la granularita' non deve
+        rifare tutti i filtri."""
+        self.trend.set_data(self.trace_rows)
+
+    def _render_traces(self, sessions, needle=""):
+        """Scheda Traces: un turno per riga, dal piu' recente."""
+        if self.trace_session:
+            sessions = [s for s in sessions if s["session_id"] == self.trace_session]
+            if not sessions:
+                # La sessione e' uscita dal periodo o dal filtro: il chip che
+                # resta acceso su un elenco vuoto e' peggio di nessun chip.
+                self.trace_session = None
+                sessions = self.filtered
+        righe = cm.flatten_traces(sessions, needle,
+                                  anche=getattr(self, "trace_hits", None))
+        for r in righe:
+            models = sorted(r["per_model"], key=lambda m: -r["per_model"][m]["cost"])
+            r["model_label"] = (models[0] if len(models) == 1
+                                else f"{models[0]} +{len(models) - 1}" if models else "—")
+        self.trace_rows = righe
+
+        st = cm.stats_of_traces(righe)
+        parti = [f"{len(righe)} turni"]
+        if st["median"] is not None:
+            parti.append(f"durata mediana {Fmt.dur(st['median'])}")
+        if st["cache_hit"] is not None:
+            parti.append(f"cache hit {pct_txt(st['cache_hit'])}")
+        parti.append(f"{sum(r['spans'] for r in righe)} span")
+        if any(r["interrupted"] for r in righe):
+            n = sum(1 for r in righe if r["interrupted"])
+            parti.append(f"⨯ {n} interrotti da te")
+        if any(r.get("archiviata") for r in righe):
+            n = sum(1 for r in righe if r.get("archiviata"))
+            parti.append(f"▪ {n} dall'archivio, senza piu' transcript")
+        parti.append("doppio click per gli span")
+        self.trace_hint = "  ·  ".join(parti)
+        if self.segmented.index == TAB_TRACES:
+            self.l_hint.config(text=self.trace_hint)
+        self._sync_chip()
+
+        self.traces_tbl.set_rows(righe, {
+            "start": f"{len(righe)} turni",
+            "cost": Fmt.cost(sum(r["cost"] for r in righe)),
+            "dur": Fmt.dur(sum(r["duration"] or 0 for r in righe)),
+            "req": sum(r["requests"] for r in righe),
+            "tools": sum(r["tools"] for r in righe),
+            "cache": pct_txt(st["cache_hit"]),
+        })
+        if not righe:
+            self.traces_tbl.set_placeholder(
+                "nessun turno con questo filtro" if needle else "nessun turno")
 
     def _render_team(self, righe, livello, nota, riepilogo=None):
         """Scheda Persone: consumo e spesa per postazione, dal raccoglitore."""
@@ -2705,7 +3806,7 @@ class App:
         if righe:
             parti.insert(0, "doppio click per i progetti di una postazione")
         self.team_hint = nota or "  ·  ".join(parti)
-        if self.segmented.index == 3:
+        if self.segmented.index == TAB_PERSONE:
             self.l_hint.config(text=self.team_hint)
 
         if not righe:
@@ -2743,7 +3844,7 @@ class App:
         self.search.set(name)
         self.project_filter = name
         self.apply_filters()
-        self.segmented.select(1)          # scheda Sessioni
+        self.segmented.select(TAB_BY_NAME["sessioni"])
         self.l_status.config(
             text=f"{len(self.filtered)} conversazioni di «{name}»  ·  "
                  f"doppio click per rileggerne una  ·  svuota il filtro per tornare a tutte")
@@ -2754,6 +3855,10 @@ class App:
 
     def open_detail(self, session):
         DetailWindow(self, session)
+
+    def open_trace(self, row):
+        """Doppio click su un turno: numeri, conversazione e cascata degli span."""
+        TraceWindow(self, row)
 
     def open_config(self):
         """Pannello di configurazione. Il file JSON resta, ma non serve aprirlo."""
@@ -2901,6 +4006,7 @@ class App:
         self.root.geometry(geo if isinstance(geo, str) and "x" in geo else "1220x720")
         for table, key, fallback in ((self.projects, "sort_projects", "cost"),
                                      (self.sessions_tbl, "sort_sessions", "cost"),
+                                     (self.traces_tbl, "sort_traces", "start"),
                                      (self.months_tbl, "sort_months", "month")):
             spec = (st or {}).get(key)
             if isinstance(spec, list) and len(spec) == 2 and spec[0]:
@@ -2921,7 +4027,7 @@ class App:
             self.project_filter = needle
             self.search.set(needle)
         tab = st.get("tab")
-        if isinstance(tab, int) and 0 <= tab <= 2:
+        if isinstance(tab, int) and 0 <= tab < len(self.segmented.buttons):
             self.segmented.select(tab)
         self._restored_live = bool(st.get("live"))
 
@@ -2933,6 +4039,7 @@ class App:
                     "geometry": self.root.geometry(),
                     "sort_projects": [self.projects.sort_col, self.projects.sort_desc],
                     "sort_sessions": [self.sessions_tbl.sort_col, self.sessions_tbl.sort_desc],
+                    "sort_traces": [self.traces_tbl.sort_col, self.traces_tbl.sort_desc],
                     "sort_months": [self.months_tbl.sort_col, self.months_tbl.sort_desc],
                     # preferenze di vista: non sono configurazione, ma è seccante
                     # doverle rimettere a ogni avvio
@@ -2976,7 +4083,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="forza il tema scuro")
     p.add_argument("--light", dest="theme", action="store_const", const="light",
                    help="forza il tema chiaro")
-    p.add_argument("--tab", choices=["progetti", "sessioni", "mesi"], default="progetti",
+    p.add_argument("--tab", choices=sorted(TAB_BY_NAME), default="progetti",
                    help="scheda aperta all'avvio")
     p.add_argument("--live", action="store_true", help="attiva subito il live")
     p.add_argument("--auto-refresh", type=float, default=None, metavar="MIN",

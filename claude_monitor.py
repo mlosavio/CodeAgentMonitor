@@ -26,6 +26,7 @@ Uso rapido:
 from __future__ import annotations
 
 import argparse
+import bisect
 import datetime as dt
 import glob
 import json
@@ -34,9 +35,12 @@ import re
 import sys
 import time
 
+import cm_archivio
+import cm_statistiche as cm_stat
+
 __version__ = "1.0.0"
 
-CACHE_FORMAT = 7  # bump per invalidare la cache su disco quando cambia lo schema
+CACHE_FORMAT = 8  # bump per invalidare la cache su disco quando cambia lo schema
 
 # --------------------------------------------------------------------------- #
 # Console
@@ -399,6 +403,42 @@ def add_tok(dst: dict, src: dict) -> None:
         dst[k] = dst.get(k, 0) + src.get(k, 0)
 
 
+def cache_hit(tok: dict) -> float | None:
+    """Quota dei token di ingresso arrivati dalla cache invece che a prezzo pieno.
+
+    Al denominatore c'e' tutto quello che e' entrato nel modello: la rilettura
+    della cache, la sua scrittura e l'input non memorizzato. L'output resta
+    fuori — e' quello che il modello produce, non quello che gli si da' da
+    leggere, e metterlo dentro farebbe scendere il numero al crescere delle
+    risposte, che non e' quello che la parola "cache" descrive.
+
+    None quando non e' entrato niente: un turno senza richieste non ha una
+    percentuale sbagliata, non ne ha nessuna.
+    """
+    served = tok.get("cache_read", 0)
+    fresh = tok.get("input", 0) + tok.get("cache_w5m", 0) + tok.get("cache_w1h", 0)
+    total = served + fresh
+    if total <= 0:
+        return None
+    return served / total
+
+
+def median(values) -> float | None:
+    """Mediana, o None su una sequenza vuota.
+
+    Sulle durate dice piu' della media: bastano due sessioni lasciate aperte
+    tutta la notte per spostare la media di ore e far sembrare lungo un lavoro
+    fatto di turni da un minuto.
+    """
+    xs = sorted(v for v in values if v is not None)
+    if not xs:
+        return None
+    mid = len(xs) // 2
+    if len(xs) % 2:
+        return float(xs[mid])
+    return (xs[mid - 1] + xs[mid]) / 2.0
+
+
 # --------------------------------------------------------------------------- #
 # Parsing dei transcript
 # --------------------------------------------------------------------------- #
@@ -500,6 +540,65 @@ def is_human_prompt(row: dict) -> bool:
     return not any(low.startswith(p) for p in SYNTHETIC_PROMPT_PREFIXES)
 
 
+# Un blocco di base64: e' cosi' che arrivano immagini e allegati dentro un
+# tool_result. Va riconosciuto prima di tagliare, altrimenti il taglio produce
+# comunque migliaia di caratteri illeggibili al posto del contenuto vero.
+_BASE64_RUN = re.compile(r"[A-Za-z0-9+/\\n]{200,}={0,2}")
+
+
+def clip_blob(value, limit: int) -> str:
+    """Argomenti o risultato di uno strumento, in una riga sola e accorciati.
+
+    Serve a farli leggere, non a conservarli: il transcript resta la fonte, e
+    un risultato di `Read` su un file grosso non ha motivo di stare in memoria
+    per intero solo perche' qualcuno ha aperto il turno che lo conteneva.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            text = str(value)
+
+    def shrink(m):
+        n = len(m.group()) * 3 // 4          # base64 -> byte
+        return f"«{n // 1024} KB di dati»" if n >= 1024 else f"«{n} byte di dati»"
+
+    text = _BASE64_RUN.sub(shrink, text)
+    if len(text) > limit:
+        return text[:limit] + ("…" if UNI else "...")
+    return text
+
+
+INTERRUPT_PREFIX = "[request interrupted"
+
+
+def is_interrupt(row: dict) -> bool:
+    """True se la riga e' il segnaposto che Claude Code scrive quando l'utente
+    interrompe la risposta a meta'.
+
+    Non e' un prompt — `is_human_prompt` giustamente lo scarta — ma non e'
+    nemmeno rumore: dice che la risposta in corso non andava bene. E' l'unico
+    giudizio negativo esplicito che il transcript contiene, e vale la pena
+    portarlo sul turno a cui appartiene.
+    """
+    if row.get("type") != "user":
+        return False
+    content = (row.get("message") or {}).get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = " ".join(
+            b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+        )
+    else:
+        return False
+    return text.strip().lower().startswith(INTERRUPT_PREFIX)
+
+
 _DROP_TAGS = re.compile(
     r"<(system-reminder|ide_opened_file|ide_selection|command-message|local-command-stdout)>"
     r".*?</\1>",
@@ -565,6 +664,19 @@ class TranscriptParser:
         self.ts: list[float] = []
         self.prompts: list[dict] = []
 
+        # Confini dei turni: (timestamp, testo del prompt). Da qui nascono i
+        # trace. Sono pochi — decine per sessione — quindi stanno in memoria e
+        # nella cache su disco senza pesare, al contrario delle richieste.
+        self.marks: list[tuple[float, str]] = []
+        self.interrupts: list[float] = []
+
+        # Solo con keep_messages: l'anagrafica delle chiamate agli strumenti,
+        # che serve a disegnare gli span di un singolo turno. Tenerla sempre
+        # vorrebbe dire portarsi dietro argomenti e risultati di ogni comando
+        # di ogni sessione — megabyte per un dettaglio che si guarda una volta.
+        self.tool_uses: list[dict] = []
+        self.tool_res: dict[str, dict] = {}
+
         # chiave di dedup -> {model, tok, ts, tools}
         self.dedup: dict[tuple, dict] = {}
         self.tool_ids: set[str] = set()
@@ -613,7 +725,15 @@ class TranscriptParser:
 
         if rtype == "user":
             if is_human_prompt(row):
-                if row.get("isSidechain"):
+                sidechain = bool(row.get("isSidechain"))
+                # Un turno comincia quando parla un umano. Dentro il transcript
+                # principale i prompt di sidechain sono l'orchestratore che
+                # istruisce un subagent *dentro* un turno gia' aperto: aprirne
+                # uno nuovo spezzerebbe in due il turno del padre. Nel file di
+                # un subagent, invece, quel prompt e' l'unico inizio che c'e'.
+                if ts is not None and (not sidechain or self.is_subagent):
+                    self.marks.append((ts, prompt_text(row, 200)))
+                if sidechain:
                     self.subagent_prompts += 1
                 else:
                     self.user_prompts += 1
@@ -626,13 +746,22 @@ class TranscriptParser:
                              "text": prompt_text(row, limit=200_000)}
                         )
             else:
+                if ts is not None and is_interrupt(row):
+                    self.interrupts.append(ts)
                 content = (row.get("message") or {}).get("content")
                 if isinstance(content, list):
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "tool_result":
-                            self.result_ids.add(
-                                block.get("tool_use_id") or f"anon-{len(self.result_ids)}"
-                            )
+                            rid = block.get("tool_use_id") or f"anon-{len(self.result_ids)}"
+                            self.result_ids.add(rid)
+                            if self.keep_messages and rid not in self.tool_res:
+                                # Il timestamp del risultato chiude lo strumento:
+                                # e' da qui che si ricava quanto e' durato.
+                                self.tool_res[rid] = {
+                                    "ts": ts,
+                                    "error": block.get("is_error") is True,
+                                    "text": clip_blob(block.get("content"), 4000),
+                                }
             return
 
         if rtype != "assistant":
@@ -651,6 +780,14 @@ class TranscriptParser:
                 if bid not in self.tool_ids:
                     self.tool_ids.add(bid)
                     names.append(block.get("name") or "?")
+                    if self.keep_messages:
+                        self.tool_uses.append({
+                            "id": bid,
+                            "name": block.get("name") or "?",
+                            "ts": ts,
+                            "args": clip_blob(block.get("input"), 4000),
+                            "req": row.get("requestId") or msg.get("id") or "",
+                        })
             elif block.get("type") == "text" and self.keep_messages:
                 # il testo cresce durante lo streaming: più avanti tengo il più lungo
                 said.append(block.get("text") or "")
@@ -672,7 +809,8 @@ class TranscriptParser:
         entry = self.dedup.get(key)
         if entry is None:
             self.dedup[key] = {"model": model, "tok": tok, "ts": ts, "tools": names,
-                               "month": month_of(ts), "text": text}
+                               "month": month_of(ts), "text": text,
+                               "req": key[0] or key[1]}
         else:
             for k in TOKEN_FIELDS:
                 if tok[k] > entry["tok"][k]:
@@ -686,6 +824,78 @@ class TranscriptParser:
                 entry["month"] = month_of(ts)
 
     # -- risultato ---------------------------------------------------------- #
+
+    def _build_turns(self) -> list[dict]:
+        """Raggruppa le richieste in turni: da un prompt umano al successivo.
+
+        Il criterio e' il **timestamp**, non la posizione nel file. Sembra un
+        dettaglio e non lo e': Claude Code riemette interi segmenti di storia —
+        stesso uuid, stesso timestamp — anche migliaia di righe piu' avanti
+        (fork, `--resume`, compattazione). Raggruppando per posizione quelle
+        righe finirebbero nell'ultimo turno, che si prenderebbe il costo di
+        tutta la conversazione. Per timestamp tornano dove sono nate, e
+        rileggere lo stesso file due volte da' lo stesso risultato.
+
+        Il turno prodotto e' un aggregato leggero: quanto e' costato, quante
+        richieste e quanti strumenti. Gli span veri — uno per richiesta e uno
+        per strumento — si ricostruiscono solo quando si apre un trace, dal
+        transcript, perche' tenerli per ogni sessione vorrebbe dire moltiplicare
+        per cento la cache su disco per un dettaglio che si guarda una volta.
+        """
+        def blank(ts, text):
+            return {"ts": ts, "end": ts, "prompt": text, "models": {},
+                    "requests": 0, "tools": 0, "_names": set(), "interrupted": False}
+
+        marks = sorted(self.marks)
+        starts = [ts for ts, _ in marks]
+        turns = [blank(ts, text) for ts, text in marks]
+        # Richieste precedenti a qualsiasi prompt: sessione ripresa da un altro
+        # file, oppure avvio non chiesto da nessuno. Non hanno un prompt a cui
+        # appartenere, ma il loro costo e' reale e non va perso.
+        head = None
+
+        def bucket(ts):
+            nonlocal head
+            if ts is not None and starts:
+                i = bisect.bisect_right(starts, ts) - 1
+                if i >= 0:
+                    return turns[i]
+            if ts is None and turns:
+                # Senza timestamp non si sa dove metterla: l'ultimo turno e' la
+                # scelta meno sbagliata, perche' e' quello ancora in corso.
+                return turns[-1]
+            if head is None:
+                head = blank(None, None)
+            return head
+
+        def stretch(t, ts):
+            if ts is None:
+                return
+            if t["ts"] is None or ts < t["ts"]:
+                t["ts"] = ts
+            if t["end"] is None or ts > t["end"]:
+                t["end"] = ts
+
+        for entry in self.dedup.values():
+            t = bucket(entry["ts"])
+            add_tok(t["models"].setdefault(entry["model"], new_tok()), entry["tok"])
+            t["requests"] += 1
+            tools = entry.get("tools") or []
+            t["tools"] += len(tools)
+            t["_names"].update(tools)
+            stretch(t, entry["ts"])
+        for ts in self.interrupts:
+            t = bucket(ts)
+            t["interrupted"] = True
+            stretch(t, ts)
+
+        out = ([head] if head is not None else []) + turns
+        for i, t in enumerate(out, 1):
+            t["n"] = i
+            # I nomi servono alla ricerca, non alla contabilita': ne bastano
+            # pochi, ordinati, senza ripetizioni.
+            t["tool_names"] = sorted(t.pop("_names"))[:24]
+        return out
 
     def snapshot(self) -> dict:
         """Record aggregato. Non consuma lo stato: richiamabile a ogni refresh."""
@@ -707,6 +917,7 @@ class TranscriptParser:
                     "tok": entry["tok"],
                     "tools": entry["tools"],
                     "text": entry.get("text") or "",
+                    "req": entry.get("req") or "",
                 })
         if self.keep_messages:
             messages.sort(key=lambda m: (m["ts"] is None, m["ts"] or 0))
@@ -737,6 +948,7 @@ class TranscriptParser:
             "bad_lines": self.bad_lines,
             "agents": dict(self.agents),
             "ts": list(self.ts),
+            "turns": self._build_turns(),
             "first_prompt": self.first_prompt,
             "version": self.version,
             "git_branch": self.git_branch,
@@ -744,6 +956,8 @@ class TranscriptParser:
         }
         if self.keep_messages:
             rec["messages"] = messages
+            rec["tool_uses"] = self.tool_uses
+            rec["tool_res"] = self.tool_res
         return rec
 
 
@@ -798,37 +1012,67 @@ def scan_file(path: str, pricing: dict, keep_messages: bool = False) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Cache su disco
+# Archivio su disco
 # --------------------------------------------------------------------------- #
 
 
 def cache_path() -> str:
+    """La vecchia cache JSON. Resta solo per il trasloco e per cancellarla."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache.json")
 
 
-def load_cache(use_cache: bool) -> dict:
-    if not use_cache:
-        return {}
-    try:
-        with open(cache_path(), encoding="utf-8") as fh:
-            data = json.load(fh)
-        if data.get("format") != CACHE_FORMAT:
-            return {}
-        return data.get("files") or {}
-    except Exception:
-        return {}
+def archivio_of(config: dict) -> dict:
+    """Opzioni dell'archivio. Il testo e' spento finche' non lo si accende."""
+    a = config.get("archivio") or {}
+    return {"testo": bool(a.get("testo", False))}
 
 
-def save_cache(files: dict, use_cache: bool) -> None:
-    if not use_cache:
-        return
+def apri_archivio_lettura():
+    """L'archivio in sola lettura, per chi vuole solo guardarci dentro.
+
+    Non allinea niente e non svuota niente: aprire l'archivio per leggere una
+    conversazione non deve poter far ripartire una riscansione.
+    """
     try:
-        tmp = cache_path() + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"format": CACHE_FORMAT, "files": files}, fh)
-        os.replace(tmp, cache_path())
+        return cm_archivio.Archivio(cm_archivio.db_path(), CACHE_FORMAT,
+                                    sola_lettura=True)
     except Exception:
-        pass
+        return None
+
+
+def apri_archivio(use_cache: bool, quiet: bool = False, testo: bool = False):
+    """Apre `cm-local.db`, traslocando la vecchia cache JSON la prima volta.
+
+    Con `--no-cache` non si apre niente: quel flag vuol dire "non toccare il
+    disco", e vale anche per l'archivio.
+
+    Se l'archivio non si apre — disco pieno, file di un altro utente, unita' di
+    rete che non regge il lock — non e' un motivo per non dare i numeri: si
+    rilegge tutto e si va avanti senza. Un monitor che si rifiuta di misurare
+    perche' non riesce a ricordare e' peggio di uno lento.
+    """
+    if not use_cache:
+        return None
+    try:
+        arch = cm_archivio.Archivio(cm_archivio.db_path(), CACHE_FORMAT, testo=testo)
+    except Exception as exc:
+        if not quiet:
+            warn(f"archivio non disponibile ({exc}): rileggo tutto")
+        return None
+    try:
+        vecchia = cache_path()
+        if os.path.exists(vecchia):
+            if not arch.conta()["file"]:
+                n = cm_archivio.importa_cache_json(arch, vecchia, CACHE_FORMAT)
+                if n and not quiet:
+                    info(f"archivio: {n} transcript ripresi dalla vecchia cache")
+            os.remove(vecchia)
+    except OSError:
+        pass  # la cache vecchia e' derivata: non riuscire a toglierla non e' grave
+    if arch.svuotata and not quiet:
+        info("formato del parser cambiato: rileggo i transcript "
+             "(l'archivio delle sessioni resta)")
+    return arch
 
 
 # --------------------------------------------------------------------------- #
@@ -864,6 +1108,8 @@ def new_session(session_id: str) -> dict:
         "agents": {},
         "subagent_files": 0,
         "ts": [],
+        "turns": [],
+        "sub_turns": [],
         "files": [],
         "version": None,
         "git_branch": None,
@@ -889,7 +1135,13 @@ def merge_record(sess: dict, rec: dict, mtime: float) -> None:
     sess["mtime"] = max(sess["mtime"], mtime)
     if rec.get("is_subagent"):
         sess["subagent_files"] += 1
+        # I turni di un subagent non sono turni della conversazione: sono lavoro
+        # svolto *dentro* un turno del padre. Restano da parte fino a finalize,
+        # che li riversa nel turno che li conteneva — anche perche' l'ordine in
+        # cui i file arrivano qui non e' garantito.
+        sess["sub_turns"].extend(rec.get("turns") or [])
     else:
+        sess["turns"].extend(rec.get("turns") or [])
         sess["project_dir"] = sess["project_dir"] or rec.get("project_dir")
         sess["cwd"] = sess["cwd"] or rec.get("cwd")
         sess["title"] = sess["title"] or rec.get("title")
@@ -898,6 +1150,85 @@ def merge_record(sess: dict, rec: dict, mtime: float) -> None:
         sess["git_branch"] = sess["git_branch"] or rec.get("git_branch")
         sess["entrypoint"] = sess["entrypoint"] or rec.get("entrypoint")
     sess["project"] = sess["project"] or project_label(rec)
+
+
+def build_traces(sess: dict, pricing: dict) -> list[dict]:
+    """I turni della sessione con costo, token e cache, subagent compresi.
+
+    Non tocca `turns` e `sub_turns`: `finalize` viene richiamato anche solo per
+    ricalcolare i costi quando cambia il listino, e deve poter ripartire dagli
+    stessi dati grezzi senza trovarli gia' consumati.
+    """
+    def in_order(key):
+        return sorted((sess.get(key) or []),
+                      key=lambda t: (t.get("ts") is None, t.get("ts") or 0))
+
+    base = in_order("turns")
+    subs = in_order("sub_turns")
+    if not base:
+        # Nessun transcript principale: restano solo i file dei subagent, e i
+        # loro turni sono l'unica traccia di quel lavoro. Meglio mostrarli come
+        # trace a se' che perderli.
+        base, subs = subs, []
+
+    traces = []
+    for i, t in enumerate(base, 1):
+        traces.append({
+            "n": i,
+            "ts": t.get("ts"),
+            "end": t.get("end"),
+            "prompt": t.get("prompt"),
+            "models": {m: dict(tok) for m, tok in (t.get("models") or {}).items()},
+            "requests": t.get("requests", 0),
+            "tools": t.get("tools", 0),
+            "tool_names": list(t.get("tool_names") or []),
+            "interrupted": bool(t.get("interrupted")),
+            "subagents": 0,
+        })
+
+    # I trace con un timestamp stanno in testa (l'ordinamento sopra manda in
+    # fondo quelli senza): la ricerca binaria lavora solo su quel tratto.
+    starts = [tr["ts"] for tr in traces if tr["ts"] is not None]
+    for s in subs:
+        ts = s.get("ts")
+        i = bisect.bisect_right(starts, ts) - 1 if (ts is not None and starts) else -1
+        if i < 0:
+            if not traces:
+                continue
+            i = 0  # un subagent partito prima del primo prompt: al primo turno
+        tr = traces[i]
+        for model, tok in (s.get("models") or {}).items():
+            add_tok(tr["models"].setdefault(model, new_tok()), tok)
+        tr["requests"] += s.get("requests", 0)
+        tr["tools"] += s.get("tools", 0)
+        tr["subagents"] += 1
+        if len(tr["tool_names"]) < 24:
+            merged = sorted(set(tr["tool_names"]) | set(s.get("tool_names") or []))
+            tr["tool_names"] = merged[:24]
+        end = s.get("end")
+        if end is not None and (tr["end"] is None or end > tr["end"]):
+            tr["end"] = end
+
+    for tr in traces:
+        total = new_tok()
+        cost = 0.0
+        per_model = {}
+        for model, tok in tr["models"].items():
+            add_tok(total, tok)
+            c, _ = cost_of(model, tok, pricing)
+            cost += c
+            per_model[model] = {"tokens": tok, "cost": c}
+        tr["tokens"] = total
+        tr["cost"] = cost
+        tr["per_model"] = per_model
+        tr["cache_hit"] = cache_hit(total)
+        tr["duration"] = (
+            (tr["end"] - tr["ts"]) if (tr["ts"] is not None and tr["end"] is not None) else None
+        )
+        # Come li conta ProxyAgent: la radice del turno, una richiesta al
+        # modello, e uno span per ogni strumento usato.
+        tr["spans"] = 1 + tr["requests"] + tr["tools"]
+    return traces
 
 
 def finalize(sess: dict, pricing: dict, idle_gap: float) -> dict:
@@ -939,7 +1270,34 @@ def finalize(sess: dict, pricing: dict, idle_gap: float) -> dict:
         }
     sess["per_month"] = per_month
     sess["messages_total"] = sess["user_prompts"] + sess["assistant_msgs"]
+
+    sess["traces"] = build_traces(sess, pricing)
+    sess["traces_n"] = len(sess["traces"])
+    sess["spans_n"] = sum(tr["spans"] for tr in sess["traces"])
+    sess["cache_hit"] = cache_hit(total)
+    sess["turn_median"] = median(tr["duration"] for tr in sess["traces"])
     return sess
+
+
+def raccogli_testo(dove: list[dict], rec: dict) -> None:
+    """Mette da parte i messaggi di un file, marcati se vengono da un subagent."""
+    for m in rec.get("messages") or ():
+        m["subagent"] = rec.get("is_subagent", False)
+        dove.append(m)
+
+
+def sessione_nel_progetto(sess: dict, project: str | None) -> bool:
+    """Il filtro `--project` applicato a una sessione senza piu' file.
+
+    Non si puo' usare `path_matches_project`, che ragiona sul percorso del
+    transcript: qui il transcript non c'e' piu'. Restano il progetto e la
+    cartella di lavoro, che sono poi le due cose che si scrivono davvero.
+    """
+    if not project or project.lower() == "all":
+        return True
+    ago = project.lower()
+    return (ago in (sess.get("project") or "").lower()
+            or ago in (sess.get("cwd") or "").lower())
 
 
 def collect(base: str, pricing: dict, use_cache: bool, idle_gap: float,
@@ -950,58 +1308,108 @@ def collect(base: str, pricing: dict, use_cache: bool, idle_gap: float,
     `on_progress(fatti, totali, path, da_cache)` viene richiamato per ogni file:
     serve a chi mostra una barra di avanzamento (la GUI). Default None = nessun effetto.
     """
+    # Nessun transcript non vuol dire nessuna sessione: possono essere scaduti
+    # tutti, e allora l'unica copia rimasta e' quella in archivio. L'avviso
+    # arriva in fondo, quando si sa se e' venuto fuori qualcosa lo stesso.
     files = sorted(glob.glob(os.path.join(base, "**", "*.jsonl"), recursive=True))
-    if not files:
-        warn(f"Nessun transcript trovato in {base}")
-        return []
 
-    cache = load_cache(use_cache)
-    fresh: dict[str, dict] = {}
+    arch = apri_archivio(use_cache, quiet, testo=archivio_of(pricing)["testo"])
+    tieni_testo = bool(arch and arch.testo)
+    indice = arch.indice() if arch else {}
+    vivi: set[str] = set()
     sessions: dict[str, dict] = {}
+    # Solo quando si archivia il testo: quali sessioni sono state toccate in
+    # questo giro, e quali dei loro file sono invece arrivati dalla cache.
+    testi: dict[str, list[dict]] = {}
+    toccate: set[str] = set()
+    dalla_cache: dict[str, list[str]] = {}
     parsed = 0
     total_files = len(files)
     if on_progress is not None:
         on_progress(0, total_files, None, True)
 
-    for done, path in enumerate(files, 1):
-        try:
-            st = os.stat(path)
-        except OSError:
+    try:
+        for done, path in enumerate(files, 1):
+            try:
+                st = os.stat(path)
+            except OSError:
+                if on_progress is not None:
+                    on_progress(done, total_files, path, True)
+                continue
+            # I file esclusi dal filtro restano comunque "vivi": esistono, e la
+            # potatura toglie solo quelli spariti davvero.
+            vivi.add(cm_archivio.chiave(path))
+            if project and not path_matches_project(path, project):
+                if on_progress is not None:
+                    on_progress(done, total_files, path, True)
+                continue
+
+            voce = indice.get(cm_archivio.chiave(path))
+            rec = None
+            if (voce and voce[0] == st.st_size
+                    and abs(voce[1] - st.st_mtime) < 0.001):
+                rec = arch.record(path)
+            da_cache = rec is not None
+            if rec is None:
+                if not quiet and st.st_size > 20_000_000:
+                    info(f"analizzo {os.path.basename(path)} ({st.st_size / 1e6:.0f} MB)…")
+                rec = scan_file(path, pricing, keep_messages=tieni_testo)
+                parsed += 1
+                if arch:
+                    arch.scrivi_file(path, st.st_size, st.st_mtime, rec)
+
+            sid = rec.get("session_id") or path
+            sess = sessions.setdefault(sid, new_session(sid))
+            merge_record(sess, rec, st.st_mtime)
+            if tieni_testo:
+                if da_cache:
+                    dalla_cache.setdefault(sid, []).append(path)
+                else:
+                    toccate.add(sid)
+                    raccogli_testo(testi.setdefault(sid, []), rec)
+
             if on_progress is not None:
-                on_progress(done, total_files, path, True)
-            continue
-        if project and not path_matches_project(path, project):
-            if on_progress is not None:
-                on_progress(done, total_files, path, True)
-            continue
-        key = path
-        cached = cache.get(key)
-        if cached and cached.get("size") == st.st_size and abs(cached.get("mtime", -1) - st.st_mtime) < 0.001:
-            rec = cached["rec"]
-        else:
-            if not quiet and st.st_size > 20_000_000:
-                info(f"analizzo {os.path.basename(path)} ({st.st_size / 1e6:.0f} MB)…")
-            rec = scan_file(path, pricing)
-            parsed += 1
-        fresh[key] = {"size": st.st_size, "mtime": st.st_mtime, "rec": rec}
+                on_progress(done, total_files, path, da_cache)
 
-        sid = rec.get("session_id") or path
-        sess = sessions.setdefault(sid, new_session(sid))
-        merge_record(sess, rec, st.st_mtime)
+        out = [finalize(s, pricing, idle_gap) for s in sessions.values()]
+        out.sort(key=lambda s: s["end"] or 0, reverse=True)
 
-        if on_progress is not None:
-            on_progress(done, total_files, path, cached is not None)
-
-    # riscrive la cache preservando le voci dei file esclusi dal filtro --project
-    if use_cache:
-        merged = dict(cache)
-        merged.update(fresh)
-        alive = {p for p in files}
-        merged = {k: v for k, v in merged.items() if k in alive}
-        save_cache(merged, use_cache)
-
-    out = [finalize(s, pricing, idle_gap) for s in sessions.values()]
-    out.sort(key=lambda s: s["end"] or 0, reverse=True)
+        if arch:
+            if tieni_testo:
+                # Il testo di una sessione si riscrive per intero: se anche solo
+                # un suo file e' cambiato, gli altri vanno riletti, altrimenti
+                # riscrivendo si perderebbe la meta' arrivata dalla cache. Sono
+                # i file dei subagent, piccoli; quello grosso e' proprio quello
+                # che e' cambiato e che si stava rileggendo comunque.
+                for sid in toccate:
+                    for path in dalla_cache.get(sid, ()):
+                        raccogli_testo(testi.setdefault(sid, []),
+                                       scan_file(path, pricing, keep_messages=True))
+                for s in out:
+                    msgs = testi.get(s["session_id"])
+                    if msgs is None:
+                        continue
+                    msgs.sort(key=lambda m: (m["ts"] is None, m["ts"] or 0))
+                    arch.scrivi_messaggi(
+                        s["session_id"], msgs,
+                        [t["ts"] for t in s["traces"] if t["ts"] is not None])
+            arch.pota(base, vivi)
+            arch.scrivi_sessioni(out)
+            # Sessioni di cui non resta un solo transcript: senza questo passaggio
+            # sparirebbero dai conti il giorno in cui Claude Code fa le pulizie.
+            orfane = [o for o in arch.sessioni_orfane({s["session_id"] for s in out})
+                      if sessione_nel_progetto(o, project)]
+            if orfane:
+                out.extend(orfane)
+                out.sort(key=lambda s: s["end"] or 0, reverse=True)
+    finally:
+        if arch:
+            try:
+                arch.chiudi()
+            except Exception:
+                pass
+    if not out and not quiet:
+        warn(f"Nessun transcript trovato in {base}")
     return out
 
 
@@ -1243,11 +1651,59 @@ def view_summary(sessions: list[dict], pricing: dict, args) -> None:
 
     print()
     print_table(headers, rows, aligns, styles={len(rows) - 1: (C.BOLD,)})
+    print_trace_summary(shown)
     print_cost_legend(pricing, shown)
 
     if not args.no_breakdown:
         print_model_breakdown(shown, pricing)
     report_unknown(shown)
+
+
+def h_pct(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{100 * value:.1f}%"
+
+
+def stats_of_traces(traces: list[dict]) -> dict:
+    """Numeri che si leggono per turno, non per sessione.
+
+    Si parte dai turni e non dalle sessioni perche' cosi' i numeri seguono il
+    filtro: cercando "riconciliazione", la cache hit che si legge e' quella dei
+    turni trovati, non quella delle sessioni che li contengono. Le due cose
+    coincidono solo quando non si filtra niente — ogni richiesta finisce in uno
+    e un solo turno.
+    """
+    total = new_tok()
+    for tr in traces:
+        add_tok(total, tr["tokens"])
+    return {
+        "traces": len(traces),
+        "spans": sum(tr["spans"] for tr in traces),
+        "median": median(tr["duration"] for tr in traces),
+        "cache_hit": cache_hit(total),
+        "interrupted": sum(1 for tr in traces if tr["interrupted"]),
+    }
+
+
+def trace_stats(sessions: list[dict]) -> dict:
+    return stats_of_traces([tr for s in sessions for tr in (s.get("traces") or [])])
+
+
+def print_trace_summary(sessions: list[dict]) -> None:
+    st = trace_stats(sessions)
+    if not st["traces"]:
+        return
+    parts = [
+        f"{C.w('turni', C.DIM)} {st['traces']}",
+        f"{C.w('span', C.DIM)} {st['spans']}",
+        f"{C.w('durata mediana', C.DIM)} {h_dur(st['median'])}",
+        f"{C.w('cache hit', C.DIM)} {h_pct(st['cache_hit'])}",
+    ]
+    if st["interrupted"]:
+        parts.append(f"{C.w('interrotti', C.DIM)} {st['interrupted']}")
+    print()
+    print("  " + f"   {BULLET}   ".join(parts))
 
 
 def print_model_breakdown(sessions: list[dict], pricing: dict) -> None:
@@ -1451,12 +1907,290 @@ def view_by_month(sessions: list[dict], pricing: dict, args) -> None:
         print(C.w("  API = mese senza attività in abbonamento, solo sessioni a consumo", C.DIM))
 
 
+def flatten_traces(sessions: list[dict], search: str = "",
+                   anche: set | None = None) -> list[dict]:
+    """Tutti i turni di tutte le sessioni, dal piu' recente.
+
+    Ogni turno porta con se' la sessione da cui viene: senza, una tabella di
+    trace e' un elenco di frasi senza contesto. `search` filtra sul testo del
+    prompt, sui nomi degli strumenti, sul progetto e sull'identificativo di
+    sessione — quello che si ha sempre sottomano, senza rileggere niente.
+
+    `anche` e' l'insieme delle coppie (sessione, turno) trovate cercando nel
+    testo archiviato: turni che il filtro qui sopra scarterebbe perche' la
+    parola non sta nel prompt ma in una risposta.
+    """
+    needle = (search or "").strip().lower()
+    anche = anche or set()
+    out = []
+    for s in sessions:
+        for tr in s.get("traces") or []:
+            if needle:
+                if (s.get("session_id"), tr.get("n")) not in anche:
+                    blob = " ".join(filter(None, [
+                        tr.get("prompt") or "", " ".join(tr.get("tool_names") or []),
+                        s.get("project") or "", s.get("session_id") or "",
+                    ])).lower()
+                    if needle not in blob:
+                        continue
+            row = dict(tr)
+            row["session_id"] = s.get("session_id")
+            row["project"] = s.get("project")
+            row["title"] = s.get("title")
+            row["archiviata"] = bool(s.get("archiviata"))
+            out.append(row)
+    out.sort(key=lambda r: (r["ts"] is None, -(r["ts"] or 0)))
+    return out
+
+
+def cerca_nel_testo(needle: str) -> set:
+    """Coppie (sessione, turno) in cui il testo archiviato contiene `needle`.
+
+    Insieme vuoto se il testo non e' archiviato: non e' un errore, e' la
+    configurazione predefinita.
+    """
+    needle = (needle or "").strip()
+    # Sotto le tre lettere non si cerca: l'indice risponderebbe mezza storia, e
+    # ogni tasto premuto costerebbe un'apertura dell'archivio per niente.
+    if len(needle) < 3:
+        return set()
+    arch = apri_archivio_lettura()
+    if arch is None:
+        return set()
+    try:
+        return {(r["session_id"], r["turno"]) for r in arch.cerca(needle)
+                if r.get("turno") is not None}
+    finally:
+        arch.chiudi()
+
+
+def view_traces(sessions: list[dict], pricing: dict, args) -> None:
+    needle = getattr(args, "search", "") or ""
+    rows_all = flatten_traces(sessions, needle, anche=cerca_nel_testo(needle))
+    if not rows_all:
+        print()
+        info("nessun turno da mostrare" + (" con questo filtro" if getattr(args, "search", "") else ""))
+        return
+    shown = rows_all[: args.top] if args.top else rows_all
+
+    print()
+    print(C.w(f"  Turni  ({len(shown)} di {len(rows_all)})", C.BOLD))
+    rows = []
+    styles = {}
+    for tr in shown:
+        models = sorted(tr["per_model"], key=lambda m: -tr["per_model"][m]["cost"])
+        label = models[0] if len(models) == 1 else (
+            (models[0] + f" +{len(models) - 1}") if models else "-")
+        prompt = tr["prompt"] or "(prima del primo prompt)"
+        if tr["interrupted"]:
+            prompt = ("⨯ " if UNI else "! ") + prompt
+        if tr.get("archiviata"):
+            prompt = ("▪ " if UNI else "= ") + prompt
+        rows.append([
+            h_time(tr["ts"]),
+            trunc(tr["project"] or "?", 18),
+            (tr["session_id"] or "")[:8],
+            h_dur(tr["duration"]),
+            tr["requests"], tr["tools"],
+            h_pct(tr["cache_hit"]),
+            h_tokens(sum(tr["tokens"][k] for k in
+                         ("input", "output", "cache_read", "cache_w5m", "cache_w1h"))),
+            h_cost(tr["cost"]),
+            trunc(label, 20),
+            trunc(prompt, 52),
+        ])
+        if tr["interrupted"]:
+            styles[len(rows) - 1] = (C.DIM,)
+    print_table(
+        ["INIZIO", "PROGETTO", "SESSIONE", "DURATA", "REQ", "TOOL", "CACHE",
+         "TOKEN", "COSTO", "MODELLO", "PROMPT"],
+        rows, ["<", "<", "<", ">", ">", ">", ">", ">", ">", "<", "<"], styles)
+    print()
+    st = trace_stats(sessions)
+    print(C.w(f"  {st['traces']} turni in {len(sessions)} sessioni  {BULLET}  "
+              f"{st['spans']} span  {BULLET}  durata mediana {h_dur(st['median'])}"
+              f"  {BULLET}  cache hit {h_pct(st['cache_hit'])}", C.DIM))
+    if st["interrupted"]:
+        print(C.w(f"  {'⨯' if UNI else '!'} = turno interrotto dall'utente "
+                  f"({st['interrupted']} in tutto): la risposta in corso non andava bene.",
+                  C.DIM))
+    if any(t.get("archiviata") for t in shown):
+        print(C.w(f"  {'▪' if UNI else '='} = dall'archivio: il transcript non c'e' piu'.",
+                  C.DIM))
+    print_cost_legend(pricing, sessions)
+
+
+def sessione_archiviata(session_id: str) -> dict:
+    """La sessione come l'ha lasciata l'archivio, o {} se non c'e'.
+
+    Accetta anche un prefisso, come tutto il resto del tool: chi legge un
+    identificativo a schermo ne copia i primi otto caratteri.
+    """
+    arch = apri_archivio_lettura()
+    if arch is None:
+        return {}
+    try:
+        riga = arch.con.execute(
+            "SELECT session_id FROM sessione WHERE session_id=? OR session_id LIKE ?"
+            " ORDER BY LENGTH(session_id) LIMIT 1",
+            (session_id, session_id + "%")).fetchone()
+        if not riga:
+            return {}
+        cur = arch.con.execute("SELECT * FROM sessione WHERE session_id=?", (riga[0],))
+        nomi = [d[0] for d in cur.description]
+        return arch._a_sessione(dict(zip(nomi, cur.fetchone())))
+    except Exception:
+        return {}
+    finally:
+        arch.chiudi()
+
+
+def conversazione_archiviata(session_id: str) -> tuple[dict, list[dict]]:
+    """Sessione e messaggi presi dall'archivio, quando il transcript non c'e' piu'.
+
+    E' il motivo per cui si archivia il testo: una conversazione cancellata da
+    `cleanupPeriodDays` resta leggibile. Quello che non torna sono i risultati
+    degli strumenti, che non vengono archiviati apposta — restano le domande e
+    le risposte, che e' la parte che si rilegge.
+    """
+    sess = sessione_archiviata(session_id)
+    if not sess:
+        return {}, []
+    arch = apri_archivio_lettura()
+    if arch is None:
+        return sess, []
+    try:
+        return sess, normalizza_messaggi(arch.messaggi_di(sess["session_id"]))
+    finally:
+        arch.chiudi()
+
+
+def normalizza_messaggi(messaggi: list[dict]) -> list[dict]:
+    """Dai messaggi dell'archivio a quelli che si aspetta chi li mostra.
+
+    Del conteggio dei token, per un messaggio riletto dall'archivio, non resta
+    niente: sta nei totali del turno, non riga per riga. Zeri espliciti invece
+    di campi assenti, cosi' chi disegna una tabella non deve sapere da dove
+    arriva quello che sta disegnando.
+    """
+    for m in messaggi:
+        if not m.get("tok"):
+            m["tok"] = new_tok()
+    return messaggi
+
+
+def fmt_stat(valore, formato: str) -> str:
+    """Un numero degli andamenti, scritto come si legge."""
+    if valore is None:
+        return "—" if UNI else "-"
+    if formato == "usd":
+        return h_cost(valore)
+    if formato == "dur":
+        return h_dur(valore)
+    if formato == "pct":
+        return f"{100 * valore:.1f}%"
+    if formato == "num1":
+        return f"{valore:.1f}"
+    return f"{valore:,.0f}".replace(",", ".")
+
+
+_SPARK = "▁▂▃▄▅▆▇█"
+
+
+def sparkline(valori, larghezza: int = 0) -> str:
+    """Una riga di blocchi proporzionali. Vuota se non c'e' niente da mostrare."""
+    xs = [v or 0 for v in valori]
+    if not UNI or not xs or max(xs) <= 0:
+        return ""
+    if larghezza and len(xs) > larghezza:   # tiene la coda: il recente conta
+        xs = xs[-larghezza:]
+    top = max(xs)
+    return "".join(_SPARK[min(len(_SPARK) - 1, int(v / top * (len(_SPARK) - 1)))]
+                   for v in xs)
+
+
+def view_trend(sessions: list[dict], pricing: dict, args) -> None:
+    turni = flatten_traces(sessions)
+    if not turni:
+        print()
+        info("nessun turno da cui ricavare un andamento")
+        return
+    iv = cm_stat.intervallo(turni)
+    grana = getattr(args, "grana", None) or cm_stat.grana_consigliata(*iv)
+    punti = cm_stat.serie(turni, grana)
+
+    nome = dict((g[0], g[1]) for g in cm_stat.GRANULARITA)[grana]
+    print()
+    print(C.w(f"  Andamento {BULLET} per {nome.lower()} {BULLET} "
+              f"dal {iv[0].strftime('%d/%m/%Y')} al {iv[1].strftime('%d/%m/%Y')}",
+              C.BOLD))
+
+    mostrati = punti[-args.top:] if args.top else punti
+    rows = []
+    for b in mostrati:
+        rows.append([
+            b["etichetta"],
+            h_cost(b["costo"]),
+            b["turni"],
+            h_dur(b["durata_totale"]),
+            fmt_stat(b["costo_turno"], "usd"),
+            fmt_stat(b["durata_mediana"], "dur"),
+            fmt_stat(b["cache_hit"], "pct"),
+            b["sessioni"],
+            b["progetti"],
+            b["interrotti"] or "",
+        ])
+    print_table(["PERIODO", "VALORE", "TURNI", "TEMPO", "PER TURNO", "MEDIANA",
+                 "CACHE", "SESS", "PROG", "INTER"],
+                rows, ["<", ">", ">", ">", ">", ">", ">", ">", ">", ">"])
+
+    linea = sparkline([b["costo"] for b in mostrati])
+    if linea:
+        print()
+        print(C.w(f"  valore consumato  {linea}", C.DIM))
+        print(C.w(f"  turni             {sparkline([b['turni'] for b in mostrati])}",
+                  C.DIM))
+
+    # Confronto: la finestra piu' recente contro quella di pari lunghezza prima.
+    giorni = int(getattr(args, "finestra", 0) or 0)
+    if not giorni:
+        giorni = {"giorno": 7, "settimana": 28, "mese": 90}[grana]
+    fine = iv[1] + dt.timedelta(days=1)
+    inizio = fine - dt.timedelta(days=giorni)
+    t0 = dt.datetime.combine(inizio, dt.time.min).timestamp()
+    recenti = [t for t in turni if t.get("ts") and t["ts"] >= t0]
+    prec = cm_stat.finestra_precedente(turni, inizio, fine)
+
+    print()
+    print(C.w(f"  Indicatori {BULLET} ultimi {giorni} giorni "
+              f"contro i {giorni} precedenti", C.BOLD))
+    righe = []
+    stili = {}
+    for k in cm_stat.indicatori(recenti, prec, turni):
+        d = k["delta"]
+        if d is None:
+            var = "—" if UNI else "-"
+        else:
+            var = f"{100 * d:+.0f}%"
+        righe.append([k["label"], fmt_stat(k["valore"], k["formato"]),
+                      fmt_stat(k["precedente"], k["formato"]), var])
+        if d and k["verso"]:
+            bene = (d > 0) == (k["verso"] == "su")
+            stili[len(righe) - 1] = (C.GREEN,) if bene else (C.YELLOW,)
+    print_table(["INDICATORE", "ORA", "PRIMA", "VAR"],
+                righe, ["<", ">", ">", ">"], stili)
+    print()
+    print(C.w("  Il colore c'è solo dove salire vuol dire qualcosa: "
+              "«costo per turno» che sale non è né buono né cattivo.", C.DIM))
+    print_cost_legend(pricing, sessions)
+
+
 def load_conversation(base: str, session_id: str, pricing: dict,
                       idle_gap: float = 300.0) -> tuple[dict, list[dict]]:
     """Sessione + messaggi in ordine, con il testo di quello che è stato detto."""
     sid, files = find_session_files(base, session_id)
     if not files:
-        return {}, []
+        return conversazione_archiviata(session_id)
     sess = new_session(sid)
     messages = []
     for path in files:
@@ -1472,6 +2206,160 @@ def load_conversation(base: str, session_id: str, pricing: dict,
     finalize(sess, pricing, idle_gap)
     messages.sort(key=lambda m: (m["ts"] is None, m["ts"] or 0))
     return sess, messages
+
+
+def build_spans(trace: dict, window: tuple[float | None, float | None],
+                messages: list[dict], tool_uses: list[dict],
+                tool_res: dict[str, dict], pricing: dict) -> list[dict]:
+    """L'albero degli span di un turno: la radice, le richieste, gli strumenti.
+
+    La durata di una richiesta non e' scritta da nessuna parte nel transcript:
+    c'e' solo l'istante in cui la risposta e' stata registrata. Ma l'istante in
+    cui e' partita e' l'ultimo evento precedente — il prompt, oppure il
+    risultato dello strumento che l'ha fatta ripartire. La differenza fra i due
+    e' l'attesa vera, ed e' la stessa lettura che fa ProxyAgent.
+
+    Gli strumenti invece hanno un inizio e una fine espliciti: la riga che li
+    invoca e quella che ne riporta il risultato.
+    """
+    lo, hi = window
+
+    def inside(ts):
+        if ts is None:
+            return False
+        if lo is not None and ts < lo:
+            return False
+        return hi is None or ts < hi
+
+    msgs = sorted((m for m in messages
+                   if m.get("kind") == "assistant" and inside(m.get("ts"))),
+                  key=lambda m: m["ts"])
+    uses = sorted((u for u in tool_uses if inside(u.get("ts"))),
+                  key=lambda u: u["ts"])
+
+    # Confini da cui una richiesta puo' essere partita: il prompt del turno e
+    # ogni risultato di strumento tornato prima di lei.
+    edges = sorted(
+        [t for t in [trace.get("ts")] if t is not None]
+        + [r["ts"] for r in tool_res.values() if inside(r.get("ts"))]
+    )
+
+    spans = [{
+        "name": "interaction", "type": "interaction", "depth": 0,
+        "start": trace.get("ts"), "end": trace.get("end"),
+        "model": None, "cost": trace.get("cost", 0.0), "ok": not trace.get("interrupted"),
+        "detail": trace.get("prompt") or "(prima del primo prompt)",
+    }]
+
+    by_req: dict[str, int] = {}
+    for m in msgs:
+        i = bisect.bisect_left(edges, m["ts"]) - 1
+        start = edges[i] if i >= 0 else m["ts"]
+        cost, _ = cost_of(m["model"], m["tok"], pricing)
+        spans.append({
+            "name": "llm_request", "type": "llm", "depth": 1,
+            "start": start, "end": m["ts"],
+            "model": m["model"], "cost": cost, "ok": True,
+            "subagent": bool(m.get("subagent")),
+            "tokens": m["tok"],
+            "detail": (m.get("text") or "").strip(),
+        })
+        if m.get("req"):
+            by_req.setdefault(m["req"], len(spans) - 1)
+
+    for u in uses:
+        res = tool_res.get(u["id"]) or {}
+        end = res.get("ts") or u["ts"]
+        spans.append({
+            "name": "tool:" + u["name"], "type": "tool",
+            "depth": 2 if u.get("req") in by_req else 1,
+            "start": u["ts"], "end": end,
+            "model": None, "cost": 0.0, "ok": not res.get("error"),
+            "parent": by_req.get(u.get("req")),
+            "args": u.get("args") or "",
+            "detail": (res.get("text") or "").strip(),
+        })
+
+    # In ordine di inizio, ma ogni strumento resta attaccato alla richiesta che
+    # l'ha invocato: e' quello che rende leggibile la cascata.
+    root = spans[0]
+    rest = spans[1:]
+    llm = [s for s in rest if s["type"] == "llm"]
+    tools_by_parent: dict[int | None, list] = {}
+    for s in rest:
+        if s["type"] == "tool":
+            tools_by_parent.setdefault(s.get("parent"), []).append(s)
+    out = [root]
+    out.extend(tools_by_parent.get(None, []))
+    for idx, s in enumerate(llm, 1):
+        out.append(s)
+        out.extend(tools_by_parent.get(idx, []))
+    for s in out:
+        s["duration"] = ((s["end"] - s["start"])
+                         if (s.get("start") is not None and s.get("end") is not None)
+                         else None)
+    return out
+
+
+def load_trace(base: str, session_id: str, n: int, pricing: dict,
+               idle_gap: float = 300.0) -> tuple[dict, dict, list[dict], list[dict]]:
+    """Un singolo turno letto a fondo: sessione, trace, span e messaggi.
+
+    Rilegge i transcript della sessione — e solo quelli — perche' gli span
+    vivono in un dettaglio che la scansione normale butta via apposta.
+    """
+    sid, files = find_session_files(base, session_id)
+    if not files:
+        # Senza transcript gli span non si ricostruiscono — vivono nel
+        # dettaglio che non si archivia. Restano i numeri del turno e, se il
+        # testo e' archiviato, quello che ci si e' detti.
+        sess = sessione_archiviata(session_id)
+        if not sess:
+            return {}, {}, [], []
+        trace = next((t for t in sess.get("traces") or [] if t["n"] == n), {})
+        arch = apri_archivio_lettura()
+        msgs = []
+        if arch is not None:
+            try:
+                msgs = normalizza_messaggi(arch.messaggi_di(sess["session_id"], turno=n))
+            finally:
+                arch.chiudi()
+        return sess, trace, [], msgs
+    sess = new_session(sid)
+    messages, tool_uses, tool_res = [], [], {}
+    for path in files:
+        rec = scan_file(path, pricing, keep_messages=True)
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = 0.0
+        merge_record(sess, rec, mtime)
+        for m in rec.get("messages", []):
+            m["subagent"] = rec["is_subagent"]
+            messages.append(m)
+        tool_uses.extend(rec.get("tool_uses") or [])
+        tool_res.update(rec.get("tool_res") or {})
+    finalize(sess, pricing, idle_gap)
+
+    traces = sess.get("traces") or []
+    trace = next((t for t in traces if t["n"] == n), None)
+    if trace is None:
+        return sess, {}, [], []
+    # La finestra arriva fino al turno successivo, non alla fine dell'ultima
+    # risposta: quello che succede in mezzo appartiene comunque a questo turno.
+    later = [t["ts"] for t in traces if t["n"] > n and t["ts"] is not None]
+    window = (trace["ts"], min(later) if later else None)
+    spans = build_spans(trace, window, messages, tool_uses, tool_res, pricing)
+
+    lo, hi = window
+    turn_msgs = [
+        m for m in messages
+        if m.get("ts") is not None
+        and (lo is None or m["ts"] >= lo)
+        and (hi is None or m["ts"] < hi)
+    ]
+    turn_msgs.sort(key=lambda m: m["ts"])
+    return sess, trace, spans, turn_msgs
 
 
 def conversation_markdown(sess: dict, messages: list[dict], pricing: dict,
@@ -1549,8 +2437,10 @@ def export_conversations(sessions: list[dict], base: str, pricing: dict,
                          on_progress=None) -> dict:
     """Scrive una cartella con un indice e una conversazione per file.
 
-    Le sessioni vengono rilette una a una: il testo dei messaggi non sta nella
-    cache, che tiene solo i numeri. Ritorna un riepilogo di quello che ha scritto.
+    Le sessioni vengono rilette una a una dai transcript, e da `cm-local.db`
+    quelle il cui transcript non c'e' piu' — sempre che il testo fosse
+    archiviato, altrimenti finiscono fra quelle non leggibili. Ritorna un
+    riepilogo di quello che ha scritto.
     """
     os.makedirs(out_dir, exist_ok=True)
     by_project: dict[str, list[tuple[dict, str]]] = {}
@@ -1799,9 +2689,15 @@ def view_watch(base: str, pricing: dict, args) -> None:
         print("\n" + C.w("  interrotto.", C.DIM))
 
 
-def build_json_payload(sessions: list[dict], pricing: dict, top: int = 0) -> dict:
-    """Payload machine-readable delle sessioni. Puro: non stampa nulla."""
+def build_json_payload(sessions: list[dict], pricing: dict, top: int = 0,
+                       with_traces: bool = False) -> dict:
+    """Payload machine-readable delle sessioni. Puro: non stampa nulla.
+
+    I turni si includono solo su richiesta: sono una decina di volte piu'
+    numerosi delle sessioni e chi vuole i totali non vuole pagarli.
+    """
     shown = sessions[:top] if top else sessions
+    st = trace_stats(shown)
     payload = {
         "generated_at": dt.datetime.now().astimezone().isoformat(),
         "tool_version": __version__,
@@ -1822,9 +2718,33 @@ def build_json_payload(sessions: list[dict], pricing: dict, top: int = 0) -> dic
             "user_prompts": sum(s["user_prompts"] for s in shown),
             "assistant_messages": sum(s["assistant_msgs"] for s in shown),
             "tool_calls": sum(s["tool_calls"] for s in shown),
+            "traces": st["traces"],
+            "spans": st["spans"],
+            "trace_median_s": round(st["median"], 1) if st["median"] is not None else None,
+            "cache_hit": round(st["cache_hit"], 6) if st["cache_hit"] is not None else None,
+            "traces_interrupted": st["interrupted"],
         },
         "sessions": [],
     }
+    def trace_json(tr: dict) -> dict:
+        return {
+            "n": tr["n"],
+            "start": dt.datetime.fromtimestamp(tr["ts"], dt.timezone.utc).isoformat()
+                     if tr["ts"] else None,
+            "duration_s": round(tr["duration"], 1) if tr["duration"] is not None else None,
+            "prompt": tr["prompt"],
+            "requests": tr["requests"],
+            "tools": tr["tools"],
+            "tool_names": tr["tool_names"],
+            "spans": tr["spans"],
+            "subagents": tr["subagents"],
+            "interrupted": tr["interrupted"],
+            "tokens": tr["tokens"],
+            "cache_hit": round(tr["cache_hit"], 6) if tr["cache_hit"] is not None else None,
+            "cost_usd": round(tr["cost"], 6),
+            "models": sorted(tr["per_model"]),
+        }
+
     for s in shown:
         payload["sessions"].append({
             "session_id": s["session_id"],
@@ -1864,12 +2784,20 @@ def build_json_payload(sessions: list[dict], pricing: dict, top: int = 0) -> dic
             },
             "subagents": {"files": s["subagent_files"], "types": s["agents"]},
             "unknown_models": s["unknown_models"],
+            "traces_n": s.get("traces_n", 0),
+            "spans_n": s.get("spans_n", 0),
+            "cache_hit": round(s["cache_hit"], 6) if s.get("cache_hit") is not None else None,
+            "trace_median_s": round(s["turn_median"], 1)
+                              if s.get("turn_median") is not None else None,
+            **({"traces": [trace_json(tr) for tr in (s.get("traces") or [])]}
+               if with_traces else {}),
         })
     return payload
 
 
 def view_json(sessions: list[dict], pricing: dict, args) -> None:
-    print(json.dumps(build_json_payload(sessions, pricing, args.top),
+    print(json.dumps(build_json_payload(sessions, pricing, args.top,
+                                        with_traces=getattr(args, "traces", False)),
                      indent=2, ensure_ascii=False))
 
 
@@ -1913,6 +2841,8 @@ def build_parser() -> argparse.ArgumentParser:
   claude_monitor.py --project MioProgetto   filtra per progetto
   claude_monitor.py --by-project           totali aggregati per progetto
   claude_monitor.py --session a1b2c3d4     dettaglio turno per turno
+  claude_monitor.py --traces               un turno per riga, di tutte le sessioni
+  claude_monitor.py --traces --search bug  cerca nei prompt e negli strumenti
   claude_monitor.py --watch                cruscotto live sulla sessione attiva
   claude_monitor.py --by-month             consumo, quota pagata e resa per mese
   claude_monitor.py --json > report.json   output machine-readable
@@ -1946,6 +2876,21 @@ configurazione (abbonamento, listino, tema, default):
     p.add_argument("--watch", action="store_true", help="cruscotto live sulla sessione più recente")
     p.add_argument("--interval", type=float, default=None,
                    help="secondi tra i refresh in --watch (default da config.json)")
+    p.add_argument("--traces", action="store_true",
+                   help="un turno per riga invece di una sessione: dal prompt alla "
+                        "fine della risposta, con durata, richieste, strumenti e costo")
+    p.add_argument("--search", metavar="TESTO",
+                   help="con --traces: filtra sul testo del prompt, sui nomi degli "
+                        "strumenti, sul progetto e sull'id di sessione")
+    p.add_argument("--trend", action="store_true",
+                   help="andamento nel tempo e indicatori: uso, adozione, "
+                        "cache, turni interrotti")
+    p.add_argument("--grana", choices=[g[0] for g in cm_stat.GRANULARITA],
+                   help="con --trend: ampiezza del periodo (default: scelta "
+                        "in base all'intervallo coperto)")
+    p.add_argument("--finestra", type=int, metavar="GIORNI",
+                   help="con --trend: giorni della finestra confrontata con la "
+                        "precedente di pari lunghezza")
     p.add_argument("--by-project", action="store_true", help="aggrega per progetto invece che per sessione")
     p.add_argument("--by-month", action="store_true",
                    help="consumo, costo ipotetico e costo reale dell'abbonamento, mese per mese")
@@ -1953,8 +2898,14 @@ configurazione (abbonamento, listino, tema, default):
     p.add_argument("--idle-gap", type=float, default=None,
                    help="pausa oltre la quale il tempo non è 'attivo' (default da config.json)")
     p.add_argument("--no-breakdown", action="store_true", help="nascondi la tabella per modello")
-    p.add_argument("--no-cache", action="store_true", help="non usare la cache su disco")
-    p.add_argument("--clear-cache", action="store_true", help="svuota la cache ed esci")
+    p.add_argument("--no-cache", action="store_true",
+                   help="non leggere né scrivere l'archivio su disco")
+    p.add_argument("--clear-cache", action="store_true",
+                   help="svuota la cache di analisi (i transcript verranno riletti) "
+                        "ed esci; l'archivio delle sessioni resta")
+    p.add_argument("--dimentica-testo", action="store_true",
+                   help="cancella dall'archivio il testo delle conversazioni ed esci; "
+                        "i numeri restano")
     p.add_argument("--no-color", action="store_true", help="disabilita i colori")
     p.add_argument("--version", action="version", version=f"claude-monitor {__version__}")
     return p
@@ -1967,9 +2918,35 @@ def main(argv=None) -> int:
     if args.clear_cache:
         try:
             os.remove(cache_path())
-            print("cache svuotata.")
         except FileNotFoundError:
-            print("nessuna cache da svuotare.")
+            pass
+        try:
+            with cm_archivio.Archivio(cm_archivio.db_path(), CACHE_FORMAT) as arch:
+                n = arch.svuota_cache()
+                c = arch.conta()
+        except Exception as exc:
+            warn(f"archivio non apribile: {exc}")
+            return 2
+        print(f"cache di analisi svuotata ({n} transcript): al prossimo giro "
+              "vengono riletti.")
+        print(f"l'archivio resta: {c['sessioni']} sessioni, {c['turni']} turni"
+              + (f", di cui {c['acquisite']} senza piu' il transcript"
+                 if c["acquisite"] else "") + ".")
+        return 0
+
+    if args.dimentica_testo:
+        try:
+            with cm_archivio.Archivio(cm_archivio.db_path(), CACHE_FORMAT) as arch:
+                n = arch.dimentica_testo()
+                c = arch.conta()
+        except Exception as exc:
+            warn(f"archivio non apribile: {exc}")
+            return 2
+        print(f"{n} messaggi cancellati dall'archivio.")
+        print(f"restano i numeri: {c['sessioni']} sessioni, {c['turni']} turni.")
+        if c["acquisite"]:
+            warn(f"{c['acquisite']} sessioni non hanno piu' il transcript: "
+                 "di quelle conversazioni non resta piu' il testo da nessuna parte.")
         return 0
 
     if not os.path.isdir(args.base):
@@ -2027,6 +3004,10 @@ def main(argv=None) -> int:
 
     if args.json:
         view_json(sessions, pricing, args)
+    elif args.trend:
+        view_trend(sessions, pricing, args)
+    elif args.traces:
+        view_traces(sessions, pricing, args)
     elif args.by_month:
         view_by_month(sessions, pricing, args)
     elif args.by_project:

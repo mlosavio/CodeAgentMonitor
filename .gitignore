@@ -22,10 +22,19 @@ conversazioni/
 # Quelle pubblicabili, con i dati offuscati, stanno in docs/.
 screen/
 
+# Schermate di software di terzi tenute come riferimento durante l'analisi.
+# Sono interfacce altrui e mostrano conversazioni vere: restano in locale.
+ProxyAgent/
+
 # Documenti interni all'azienda: assetti organizzativi, valutazioni sul
 # trattamento dei dati dei dipendenti, casi reali di dati personali trovati.
 # Questo repo e' pubblico: qui dentro non deve finire nulla di tutto cio'.
 interno/
+
+# Archivio locale: le TUE sessioni e i tuoi turni, con l'inizio dei prompt che
+# hai scritto. Deriva dai transcript ma sopravvive alla loro scadenza, quindi
+# non e' un file rigenerabile a piacere: e' storia, e resta sulla tua macchina.
+cm-local.db
 
 # Archivio della telemetria raccolta: contiene consumi per persona e per
 # sessione. E' un trattamento di dati dei lavoratori, non un file di lavoro.
