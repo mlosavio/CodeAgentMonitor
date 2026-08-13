@@ -1,5 +1,7 @@
 # CodeAgentMonitor (CAM)
 
+**Italiano** · [English](README.en.md)
+
 Tempo, costo e numero di messaggi delle conversazioni **Claude Code** e **GitHub Copilot**,
 ricavati dai file che quegli strumenti scrivono già in locale. Con interfaccia grafica,
 cruscotto live nel terminale e un segmento per la statusline.
@@ -110,10 +112,10 @@ python cam.py --json        :: output machine-readable
 | `--no-cache` / `--clear-cache` | ignora / svuota la cache di analisi ([l'archivio resta](#larchivio-cam-localdb)) |
 | `--dimentica-testo` | cancella dall'archivio il testo delle conversazioni; i numeri restano |
 | `--archivio` | [quanto pesa l'archivio e da cosa](#quanto-pesa-e-come-farlo-calare) |
+| `--no-color` | niente ANSI (rispetta anche `NO_COLOR`) |
 
 Le sessioni di [GitHub Copilot](#github-copilot) compaiono accanto a quelle di Claude Code,
 con costo e token a «—».
-| `--no-color` | niente ANSI (rispetta anche `NO_COLOR`) |
 
 ---
 

@@ -25,6 +25,8 @@ quello che manca.
 | [PF12](#pf12--le-postazioni-che-consumano-e-non-sono-in-fattura) | Le postazioni che consumano e non sono in fattura | **fatto** 13/08 | — |
 | [PF13](#pf13--andamento-delladozione-nel-team) | Andamento dell'adozione nel team | **fatto** 13/08 | PF04 |
 | [PF14](#pf14--il-raccoglitore-fuori-dalla-rete-aziendale) | Il raccoglitore fuori dalla rete aziendale | da fare | — |
+| [PF15](#pf15--linterfaccia-in-inglese) | L'interfaccia in inglese | in corso — pagina fatta, app no | — |
+| [PF16](#pf16--cruscotto-per-sistemi-multi-agente) | Cruscotto per sistemi multi-agente | da valutare | — |
 
 ---
 
@@ -434,3 +436,58 @@ produce è documentazione.
 Da scrivere solo se quella strada non basta, in quest'ordine: TLS nel raccoglitore (o l'indicazione
 esplicita di un reverse proxy davanti, che è meno codice e più standard), e token distinti per
 lettura e scrittura. Il secondo è utile **anche in LAN**, indipendentemente dal VPS.
+
+### PF15 — L'interfaccia in inglese
+
+**Stato:** in corso il 2026-08-13 — **pagina fatta, applicazione no** · **Dipende da:** —
+
+Il progetto è nato in italiano e il post di lancio prometteva l'inglese come «primo passo per
+renderlo utile fuori di qui». Sono due lavori di taglia molto diversa, ed è per questo che qui
+uno è chiuso e l'altro no.
+
+**Fatto: `README.en.md`**, con il collegamento fra le due pagine in testa a entrambe. Non è una
+traduzione meccanica dell'italiano: copre tutte le sezioni e tutte le affermazioni che contano,
+ma dove il README italiano si allarga in argomentazioni lunghe la pagina inglese tiene il punto
+e stringe, e rimanda all'italiano dichiarandolo. Due documenti da 72 KB da tenere allineati a
+mano diventerebbero due documenti che divergono.
+
+**Da fare: l'applicazione.** Misurata, non stimata:
+
+| | quante |
+|---|---|
+| stringhe visibili all'utente, escluse le docstring | **718** |
+| di cui frasi lunghe (>60 caratteri) | **176** |
+| `cam_gui.py` / `cam.py` / `cam_collector.py` | 261 / 175 / 150 |
+
+Le 176 frasi lunghe sono il lavoro vero, e sono anche il motivo per cui non va fatto in fretta:
+sono le spiegazioni sotto le tabelle — *«SE FOSSE API = quanto varrebbe a listino API. NON l'hai
+pagato»* — cioè esattamente la cosa che distingue questo strumento da un contatore. Una
+traduzione approssimativa lì dentro toglie al progetto la sua unica qualità distintiva; meglio
+nessuna traduzione che una che dice quasi la stessa cosa.
+
+**Il come, deciso ma non ancora scritto.** Catalogo con **la stringa italiana come chiave**
+(`_("Sessioni")`), non chiavi simboliche: l'italiano resta il sorgente, il codice resta
+leggibile a chi lo mantiene, e il diff è piccolo. Il difetto noto di quell'approccio — cambiare
+una parola in italiano fa scadere in silenzio la traduzione — si compensa con **una prova che
+elenca le stringhe visibili senza voce nel catalogo e fallisce**: così una traduzione persa
+diventa una prova rossa invece di un pezzo di interfaccia che torna italiano da solo. È lo
+stesso metodo con cui `test_collector.py` sorveglia la riservatezza guardando i byte del file.
+
+Lingua da `config.json` (`lang`), variabile d'ambiente, oppure dal sistema; `--lang` la
+sovrascrive. Il ripiego è sempre l'italiano, mai la chiave nuda.
+
+### PF16 — Cruscotto per sistemi multi-agente
+
+**Stato:** da valutare · **Dipende da:** —
+
+Oggi i subagent vengono **contati**: il loro consumo è sommato al turno del padre e `REQ` li
+include. È giusto per la domanda «quanto è costato questo turno», ed è tutto quello che serve
+finché gli agenti sono pochi.
+
+Un cruscotto per sistemi multi-agente è un'altra cosa, e le domande sono: *chi ha delegato a
+chi*, *quanto costa un ramo dell'albero*, *dove si spreca*. Nei transcript l'albero c'è —
+i file dei subagent stanno sotto la sessione padre e i prompt di sidechain dicono chi istruisce
+chi — quindi non manca il dato, manca la vista.
+
+Sta qui perché era una delle quattro direzioni dichiarate nel post di lancio, e un backlog
+pubblico che non le nomina chiede contributi su cose che non risultano da nessuna parte.
