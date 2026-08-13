@@ -1,6 +1,6 @@
 # Post LinkedIn — lancio
 
-> Copia il testo qui sotto. Allega `docs/claude-code-monitor.png`.
+> Copia il testo qui sotto. Allega `docs/CodeAgentMonitor.png`.
 
 ---
 
@@ -16,7 +16,7 @@ Detto altrimenti: il costo di una sessione non lo fa quanto scrive l'assistente,
 lo fa **quanto contesto si trascina dietro**.
 
 Non lo sapevo perché non lo misuravo. Così ho scritto uno strumento per farlo, e
-oggi lo rendo pubblico: **claude-code-monitor**.
+oggi lo rendo pubblico: **CodeAgentMonitor**.
 
 Legge i transcript che Claude Code salva già da solo sul tuo computer e risponde
 a tre domande che è facilissimo confondere:
@@ -58,7 +58,7 @@ provato altrove.
 
 Licenza MIT, tutto gratuito, issue e pull request benvenute.
 
-👉 github.com/mlosavio/claude-code-monitor
+👉 github.com/mlosavio/CodeAgentMonitor
 
 Se lo provi e trovi un numero che non torna, aprimi una issue: i due errori qui
 sopra li ho trovati esattamente così, guardando un totale e dicendo "non mi torna".

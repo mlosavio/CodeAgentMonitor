@@ -30,7 +30,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from http.server import ThreadingHTTPServer
 
-import cm_collector as cc
+import cam_collector as cc
 
 try:  # console Windows: senza questo l'output rediretto muore sugli accenti
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -52,7 +52,7 @@ def verifica(nome: str, ottenuto, atteso) -> None:
           + ("" if buono else f"   atteso {atteso!r}"))
 
 
-cartella = tempfile.mkdtemp(prefix="cm-carico-")
+cartella = tempfile.mkdtemp(prefix="cam-carico-")
 store = cc.Store(f"{cartella}/carico.db",
                  cc.make_privacy("pseudonimo", f"{cartella}/k.key"), "pseudonimo")
 cc.Handler.store = store
@@ -73,7 +73,7 @@ lock = threading.Lock()
 
 
 def una_postazione(n: int) -> None:
-    """Una macchina che spedisce piu' volte, come farebbe cm_agent."""
+    """Una macchina che spedisce piu' volte, come farebbe cam_agent."""
     utente = f"utente{n:03d}@azienda.it"
     for giro in range(INVII):
         sessioni = []
@@ -91,7 +91,7 @@ def una_postazione(n: int) -> None:
                 "per_month": {"2026-08": {"claude-opus-5": {"cost": 1.0}}},
             })
         corpo = json.dumps({
-            "agent": "cm-agent/carico", "machine": f"m-{n:03d}", "user": utente,
+            "agent": "cam-agent/carico", "machine": f"m-{n:03d}", "user": utente,
             "attrs": {"user.email": utente}, "sessions": sessioni,
         }).encode()
         req = urllib.request.Request(f"{base}/v1/sessions", corpo,

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Installa il segmento di claude-code-monitor nella statusline di Claude Code.
+Installa il segmento di CodeAgentMonitor nella statusline di Claude Code.
 
     python install_statusline.py            installa
     python install_statusline.py --wrap     installa conservando la statusline attuale
     python install_statusline.py --remove   disinstalla
 
 Cosa fa, in concreto:
-  1. copia `statusline/cm-statusline.js` in ~/.claude/hooks/
-  2. scrive ~/.claude/cm-statusline.json con il percorso di questo progetto,
+  1. copia `statusline/cam-statusline.js` in ~/.claude/hooks/
+  2. scrive ~/.claude/cam-statusline.json con il percorso di questo progetto,
      così lo script sa dove trovare config.json
   3. imposta `statusLine` in ~/.claude/settings.json
 
@@ -32,9 +32,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CLAUDE_DIR = os.path.join(os.path.expanduser("~"), ".claude")
 HOOKS_DIR = os.path.join(CLAUDE_DIR, "hooks")
 SETTINGS = os.path.join(CLAUDE_DIR, "settings.json")
-POINTER = os.path.join(CLAUDE_DIR, "cm-statusline.json")
-SOURCE = os.path.join(HERE, "statusline", "cm-statusline.js")
-TARGET = os.path.join(HOOKS_DIR, "cm-statusline.js")
+POINTER = os.path.join(CLAUDE_DIR, "cam-statusline.json")
+SOURCE = os.path.join(HERE, "statusline", "cam-statusline.js")
+TARGET = os.path.join(HOOKS_DIR, "cam-statusline.js")
+# Come si chiamavano prima che il progetto diventasse CAM. Vanno tolti quando si
+# reinstalla, altrimenti restano due segmenti installati e uno non lo aggiorna
+# piu' nessuno.
+PRECEDENTI = (os.path.join(HOOKS_DIR, "cm-statusline.js"),
+              os.path.join(CLAUDE_DIR, "cm-statusline.json"))
 
 
 def read_json(path, default=None):
@@ -96,6 +101,10 @@ def install(wrap: bool) -> int:
     settings["statusLine"] = {"type": "command", "command": command_string()}
     write_json(SETTINGS, settings)
     print(f"impostato statusLine in {SETTINGS}")
+    for vecchio in PRECEDENTI:
+        if os.path.isfile(vecchio):
+            os.remove(vecchio)
+            print(f"tolto     {vecchio} (nome precedente)")
     print("\nfatto. Riavvia Claude Code per vedere il segmento.")
     return 0
 
@@ -112,7 +121,9 @@ def split_command(command: str) -> list[str]:
 def remove() -> int:
     settings = read_json(SETTINGS)
     current = (settings.get("statusLine") or {}).get("command") or ""
-    if "cm-statusline" not in current:
+    # Anche col nome vecchio: chi l'ha installata prima del rename deve poterla
+    # disinstallare, altrimenti resterebbe attaccata senza un modo per toglierla.
+    if not any(n in current for n in ("cam-statusline", "cm-statusline")):
         print("la statusline non è la nostra: non tocco niente")
     else:
         config = read_json(os.path.join(HERE, "config.json"))
@@ -128,7 +139,7 @@ def remove() -> int:
             settings.pop("statusLine", None)
             print("rimossa la voce statusLine")
         write_json(SETTINGS, settings)
-    for path in (TARGET, POINTER):
+    for path in (TARGET, POINTER) + PRECEDENTI:
         if os.path.isfile(path):
             os.remove(path)
             print(f"rimosso   {path}")
@@ -137,7 +148,7 @@ def remove() -> int:
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="Installa il segmento di claude-code-monitor nella statusline.")
+        description="Installa il segmento di CodeAgentMonitor nella statusline.")
     p.add_argument("--wrap", action="store_true",
                    help="conserva la statusline attuale eseguendola come figlio")
     p.add_argument("--remove", action="store_true", help="disinstalla")

@@ -37,8 +37,8 @@ import urllib.parse
 
 FONTE = "copilot"
 
-# Le stesse voci che usa claude_monitor. Sono ripetute qui invece di importarle
-# perche' e' claude_monitor a importare questo modulo, non il contrario — e
+# Le stesse voci che usa cam. Sono ripetute qui invece di importarle
+# perche' e' cam a importare questo modulo, non il contrario — e
 # soprattutto perche' i consumatori indicizzano direttamente `tokens["input"]`:
 # un dizionario vuoto li farebbe saltare. Qui i token valgono zero e sono
 # `costo_noto: False` a dire che quello zero non e' una misura.

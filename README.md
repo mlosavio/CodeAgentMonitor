@@ -1,8 +1,8 @@
-# claude-code-monitor
+# CodeAgentMonitor (CAM)
 
-Tempo, costo e numero di messaggi delle conversazioni **Claude Code**, ricavati dai transcript
-JSONL che Claude Code scrive in locale. Con interfaccia grafica, cruscotto live nel terminale
-e un segmento per la statusline.
+Tempo, costo e numero di messaggi delle conversazioni **Claude Code** e **GitHub Copilot**,
+ricavati dai file che quegli strumenti scrivono già in locale. Con interfaccia grafica,
+cruscotto live nel terminale e un segmento per la statusline.
 
 Per un gruppo di lavoro c'è anche un [raccoglitore della telemetria](#più-macchine-il-pannello-di-team)
 che mette insieme più macchine, con tre livelli di riservatezza fra cui scegliere.
@@ -11,9 +11,15 @@ Solo libreria standard: **nessuna dipendenza da installare**, né Python né npm
 
 ![licenza MIT](https://img.shields.io/badge/licenza-MIT-blue) ![solo stdlib](https://img.shields.io/badge/dipendenze-nessuna-brightgreen)
 
-![claude-code-monitor](docs/claude-code-monitor.png)
+![CodeAgentMonitor](docs/CodeAgentMonitor.png)
 
 *Nelle schermate i nomi dei progetti e i titoli delle conversazioni sono offuscati.*
+
+> **Si chiamava `claude-code-monitor`.** Ha cambiato nome quando ha smesso di leggere solo
+> Claude Code. Se stai aggiornando da una versione precedente non devi fare niente: i comandi
+> sono `python cam.py` invece di `python claude_monitor.py`, e archivio, chiave dei
+> pseudonimi e stato del raccoglitore [traslocano da soli](#se-arrivi-da-claude-code-monitor)
+> alla prima esecuzione.
 
 ---
 
@@ -45,10 +51,10 @@ Gennaio a `0,2×` vuol dire che la quota di quel mese è stata pagata quasi a vu
 Serve **Python 3.9+** e Claude Code. Niente altro.
 
 ```bat
-git clone https://github.com/mlosavio/claude-code-monitor.git
-cd claude-code-monitor
+git clone https://github.com/mlosavio/CodeAgentMonitor.git
+cd CodeAgentMonitor
 copy config.example.json config.json
-python claude_monitor.py
+python cam.py
 ```
 
 Apri `config.json` (o il pulsante **Configura** nella GUI) e metti il tuo piano e quanto paghi
@@ -66,14 +72,14 @@ python install_statusline.py --wrap    :: conserva la statusline che hai già
 ## Uso
 
 ```bat
-python claude_monitor_gui.py           :: interfaccia grafica
-python claude_monitor.py               :: riepilogo delle ultime sessioni
-python claude_monitor.py --by-month    :: consumo, speso e resa per mese
-python claude_monitor.py --by-project  :: totali per progetto
-python claude_monitor.py --traces      :: un turno per riga, non una sessione
-python claude_monitor.py --trend       :: andamento nel tempo e indicatori
-python claude_monitor.py --watch       :: cruscotto live nel terminale
-python claude_monitor.py --json        :: output machine-readable
+python cam_gui.py           :: interfaccia grafica
+python cam.py               :: riepilogo delle ultime sessioni
+python cam.py --by-month    :: consumo, speso e resa per mese
+python cam.py --by-project  :: totali per progetto
+python cam.py --traces      :: un turno per riga, non una sessione
+python cam.py --trend       :: andamento nel tempo e indicatori
+python cam.py --watch       :: cruscotto live nel terminale
+python cam.py --json        :: output machine-readable
 ```
 
 | Opzione | Effetto |
@@ -94,7 +100,7 @@ python claude_monitor.py --json        :: output machine-readable
 | `--chat` | con `--session`: la conversazione in Markdown |
 | `--watch` / `--interval S` | live sulla sessione modificata più di recente |
 | `--idle-gap S` | pausa oltre la quale il tempo non è "attivo" (default 300s) |
-| `--no-cache` / `--clear-cache` | ignora / svuota la cache di analisi ([l'archivio resta](#larchivio-cm-localdb)) |
+| `--no-cache` / `--clear-cache` | ignora / svuota la cache di analisi ([l'archivio resta](#larchivio-cam-localdb)) |
 | `--dimentica-testo` | cancella dall'archivio il testo delle conversazioni; i numeri restano |
 | `--archivio` | [quanto pesa l'archivio e da cosa](#quanto-pesa-e-come-farlo-calare) |
 
@@ -107,8 +113,8 @@ con costo e token a «—».
 ## Interfaccia grafica
 
 ```bat
-python  claude_monitor_gui.py     :: con console, per vedere i traceback
-pythonw claude_monitor_gui.py     :: senza console
+python  cam_gui.py     :: con console, per vedere i traceback
+pythonw cam_gui.py     :: senza console
 ```
 
 Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla cifra.
@@ -191,9 +197,9 @@ alfabetico è già quello cronologico.
 Da riga di comando, con gli stessi filtri:
 
 ```bat
-python claude_monitor.py --session a1b2c3d4 --chat > conversazione.md
-python claude_monitor.py --project MioProgetto --export-md .\esportazione
-python claude_monitor.py --since 30d --export-md .\esportazione --with-subagents
+python cam.py --session a1b2c3d4 --chat > conversazione.md
+python cam.py --project MioProgetto --export-md .\esportazione
+python cam.py --since 30d --export-md .\esportazione --with-subagents
 ```
 
 I messaggi dei subagent sono esclusi per default: sono lavoro interno e spezzerebbero il filo
@@ -224,7 +230,7 @@ Il costo è lo spazio su disco, che cresce di qualche centinaio di MB al mese di
 Per le conversazioni che ti interessano davvero, l'esportazione in Markdown resta il modo più
 solido: è un file tuo, leggibile senza questo tool e senza Claude Code.
 
-### L'archivio: `cm-local.db`
+### L'archivio: `cam-local.db`
 
 I **numeri** invece sì: stanno in un SQLite accanto allo script. Fino alla versione precedente
 era `.cache.json`, un blocco unico riscritto per intero e buttato via ogni volta che cambiava
@@ -292,7 +298,7 @@ Cosa cambia, acceso:
 
 Accenderlo fa rileggere tutti i transcript una volta — quelli già in cache erano stati letti
 senza tenere il testo. Spegnerlo non cancella niente: per cancellare c'è
-`python claude_monitor.py --dimentica-testo`, che toglie il testo e lascia i numeri.
+`python cam.py --dimentica-testo`, che toglie il testo e lascia i numeri.
 
 Tenere su disco il contenuto delle proprie conversazioni è una decisione, non un default da
 scoprire dopo: per questo è spento, e per questo c'è un modo esplicito per disfarlo.
@@ -311,7 +317,7 @@ e a **conservarlo** quando il transcript non c'è più. `*.db` è già in `.giti
 ### Quanto pesa, e come farlo calare
 
 ```
-python claude_monitor.py --archivio
+python cam.py --archivio
 ```
 
 dice quanto occupa il file e **da cosa** — senza quella risposta le uniche mosse possibili
@@ -349,8 +355,8 @@ grossa per capire *dove* siano finiti. Il **turno** — una tua domanda e tutto 
 seguito, fino alla domanda dopo — è la grana in cui si lavora davvero.
 
 ```bat
-python claude_monitor.py --traces --top 20
-python claude_monitor.py --traces --search riconciliazione
+python cam.py --traces --top 20
+python cam.py --traces --search riconciliazione
 ```
 
 ```
@@ -445,7 +451,7 @@ contengono la parola e non dove.
 ### Esportare i turni come dataset
 
 ```bat
-python claude_monitor.py --traces --search riconciliazione --export-turni turni.jsonl
+python cam.py --traces --search riconciliazione --export-turni turni.jsonl
 ```
 
 Un turno per riga, con domanda, risposta, modelli, durata, strumenti, costo, cache hit e se è
@@ -468,9 +474,9 @@ qualcosa è peggiorato la settimana scorsa. Per quello c'è la scheda **Andament
 di comando `--trend`.
 
 ```bat
-python claude_monitor.py --trend
-python claude_monitor.py --trend --grana mese
-python claude_monitor.py --trend --finestra 7      :: confronta 7 giorni con i 7 prima
+python cam.py --trend
+python cam.py --trend --grana mese
+python cam.py --trend --finestra 7      :: confronta 7 giorni con i 7 prima
 ```
 
 ```
@@ -579,7 +585,7 @@ Copilot **non scrive un transcript**. Quello è storage interno di VS Code, in u
 pubblico che cambia con le versioni dell'estensione. Su una fonte così non si può dire «se il
 parser sbaglia, si rilegge»: il file di oggi domani può non esserci o avere un'altra forma.
 
-Perciò quello che si legge finisce in [archivio](#larchivio-cm-localdb) come
+Perciò quello che si legge finisce in [archivio](#larchivio-cam-localdb) come
 `origine = 'acquisito'` e non si prova a ricostruirlo — è la stessa regola che vale per i
 transcript scaduti. E un file con una forma inattesa fa perdere quella sessione, non fa cadere
 il programma: le prove ne costruiscono apposta di rotti, vuoti e con turni malformati.
@@ -671,15 +677,15 @@ I transcript coprono la tua macchina e basta. Per vedere un gruppo di lavoro ser
 fonte, e **Claude Code ce l'ha già**: sa esportare da sé la propria telemetria via
 OpenTelemetry, senza che sulle postazioni debba girare niente di scritto da noi.
 
-`cm_collector.py` riceve quel flusso e lo conserva. Riceve **OTLP in codifica JSON su HTTP**,
+`cam_collector.py` riceve quel flusso e lo conserva. Riceve **OTLP in codifica JSON su HTTP**,
 quindi niente protobuf e nessuna dipendenza: solo stdlib, come tutto il resto.
 
 Per provarlo su una macchina sola, tre comandi:
 
 ```bat
-python cm_collector.py --setup          :: stampa la configurazione da mettere in settings.json
-python cm_collector.py                  :: avvia il raccoglitore su 127.0.0.1:4318
-python cm_collector.py --report --by user
+python cam_collector.py --setup          :: stampa la configurazione da mettere in settings.json
+python cam_collector.py                  :: avvia il raccoglitore su 127.0.0.1:4318
+python cam_collector.py --report --by user
 ```
 
 Poi **riavvia Claude Code**: le variabili d'ambiente si leggono all'avvio, le sessioni già
@@ -709,10 +715,10 @@ python -c "import secrets; print(secrets.token_urlsafe(24))"
 collegarsi.
 
 ```bat
-python cm_collector.py --host 0.0.0.0 --port 4318 --token IL-TOKEN ^
+python cam_collector.py --host 0.0.0.0 --port 4318 --token IL-TOKEN ^
     --privacy pseudonimo ^
-    --db C:\claude-team\cm-team.db ^
-    --key C:\claude-team\chiavi\cm-pseudonimi.key
+    --db C:\claude-team\cam-team.db ^
+    --key C:\claude-team\chiavi\cam-pseudonimi.key
 ```
 
 Tieni **la chiave in una cartella diversa dall'archivio**, con permessi diversi: chi ha
@@ -723,7 +729,7 @@ metterli nella stessa cartella lo annulla senza che nulla smetta di funzionare.
 servizio da esporre altrove.
 
 ```powershell
-New-NetFirewallRule -DisplayName 'cm-collector' -Direction Inbound `
+New-NetFirewallRule -DisplayName 'cam-collector' -Direction Inbound `
     -Protocol TCP -LocalPort 4318 -Action Allow -Profile Domain
 ```
 
@@ -732,7 +738,7 @@ ritenta per poco e poi lascia perdere, e quell'intervallo non si recupera più. 
 con l'agente, che invece l'arretrato lo ricalcola.
 
 ```bat
-python cm_collector.py --setup-service --host 0.0.0.0 --port 4318 --privacy pseudonimo --db C:\claude-team\cm-team.db
+python cam_collector.py --setup-service --host 0.0.0.0 --port 4318 --privacy pseudonimo --db C:\claude-team\cam-team.db
 ```
 
 Stampa il comando già compilato con questi parametri: collegamento in Esecuzione automatica
@@ -765,7 +771,7 @@ con delle variabili d'ambiente, il secondo è un processo da avviare.
 Per chi ci lavora non cambia niente: nessuna finestra, nessun rallentamento, nessuna porta
 aperta sulla sua macchina. L'agente parla solo lui, verso il raccoglitore.
 
-**1. I file.** Sulla postazione ne servono **due**: `claude_monitor.py` e `cm_agent.py`. Nessuna
+**1. I file.** Sulla postazione ne servono **due**: `cam.py` e `cam_agent.py`. Nessuna
 dipendenza da installare, e `config.json` non è obbligatorio — se manca valgono i valori
 integrati. Vanno bene una cartella di rete in sola lettura o un clone del repository.
 
@@ -773,7 +779,7 @@ integrati. Vanno bene una cartella di rete in sola lettura o un clone del reposi
 altrimenti stampa una configurazione che verrà rifiutata:
 
 ```bat
-python cm_collector.py --setup --host srv-claude.azienda.it --token IL-TOKEN
+python cam_collector.py --setup --host srv-claude.azienda.it --token IL-TOKEN
 ```
 
 Incolla il blocco `env` in `~/.claude/settings.json` della postazione e **riavvia Claude Code**:
@@ -801,28 +807,28 @@ per criterio di gruppo.
 **4. L'agente.** Prima a vuoto, per vedere cosa uscirebbe:
 
 ```bat
-python cm_agent.py --endpoint http://srv-claude.azienda.it:4318 --token IL-TOKEN --dry-run
-python cm_agent.py --show-payload --dry-run     :: il JSON esatto, campo per campo
+python cam_agent.py --endpoint http://srv-claude.azienda.it:4318 --token IL-TOKEN --dry-run
+python cam_agent.py --show-payload --dry-run     :: il JSON esatto, campo per campo
 ```
 
 Poi il primo invio vero, che manda **tutto lo storico** sul disco — su una macchina con mesi di
 transcript sono decine di sessioni e qualche secondo:
 
 ```bat
-python cm_agent.py --endpoint http://srv-claude.azienda.it:4318 --token IL-TOKEN --once
+python cam_agent.py --endpoint http://srv-claude.azienda.it:4318 --token IL-TOKEN --once
 ```
 
 E infine il servizio, che gira come l'utente e non come servizio di macchina: i transcript stanno
 dentro il profilo della persona, e un servizio di sistema non li vedrebbe.
 
 ```bat
-python cm_agent.py --setup-service --endpoint http://srv-claude.azienda.it:4318 --token IL-TOKEN
+python cam_agent.py --setup-service --endpoint http://srv-claude.azienda.it:4318 --token IL-TOKEN
 ```
 
 **5. Verifica dal raccoglitore**, non dalla postazione:
 
 ```bat
-python cm_collector.py --status
+python cam_collector.py --status
 ```
 
 La postazione nuova deve comparire con **due** tempi recenti: quando ha parlato l'agente e quando
@@ -870,21 +876,21 @@ perché è la riga che si mostra a chi chiede.
 passerebbe a vuoto. Va guardato anche il file `-wal`, perché finché SQLite non fa il checkpoint
 i dati stanno lì e non nel `.db`.
 
-### Lo storico: `cm_agent.py`
+### Lo storico: `cam_agent.py`
 
 La telemetria parte dal giorno in cui la accendi. Su questa macchina, il giorno
 dell'accensione, copriva lo **0,00%** del consumo totale: `$0.10` contro `$2.958,85`
 ricavati dai transcript, che erano sul disco da tre mesi. È la misura di cosa manca alla sola
 telemetria.
 
-`cm_agent.py` colma quel vuoto: rilegge i transcript con lo stesso parser del pannello, calcola
+`cam_agent.py` colma quel vuoto: rilegge i transcript con lo stesso parser del pannello, calcola
 la differenza rispetto a quanto già spedito e manda solo quella.
 
 ```bat
-python cm_agent.py --dry-run       :: mostra cosa spedirebbe, senza spedire
-python cm_agent.py --show-payload  :: stampa il JSON esatto che uscirebbe
-python cm_agent.py --once          :: un invio solo
-python cm_agent.py                 :: resta e rispedisce ogni 15 minuti
+python cam_agent.py --dry-run       :: mostra cosa spedirebbe, senza spedire
+python cam_agent.py --show-payload  :: stampa il JSON esatto che uscirebbe
+python cam_agent.py --once          :: un invio solo
+python cam_agent.py                 :: resta e rispedisce ogni 15 minuti
 ```
 
 Non apre porte e non resta in ascolto: parla solo lui, verso il raccoglitore. Funziona quindi
@@ -950,8 +956,8 @@ Telemetria e transcript misurano il **consumo**. La console Anthropic è l'unica
 **spesa**. Caricarla chiude il cerchio:
 
 ```bat
-python cm_collector.py --import-csv export.csv
-python cm_collector.py --riconcilia
+python cam_collector.py --import-csv export.csv
+python cam_collector.py --riconcilia
 ```
 
 Il formato dell'export non è documentato e cambia, quindi le colonne si riconoscono dai nomi
@@ -1008,9 +1014,9 @@ disegnarne uno vorrebbe dire inventarlo.
 ### Il riepilogo da portare in riunione
 
 ```bat
-python cm_collector.py --relazione                :: a schermo
-python cm_collector.py --relazione consumo.md     :: su file
-python cm_collector.py --relazione consumo.md --since 90d
+python cam_collector.py --relazione                :: a schermo
+python cam_collector.py --relazione consumo.md     :: su file
+python cam_collector.py --relazione consumo.md --since 90d
 ```
 
 Markdown con le cifre in breve, la tabella per postazione e quella per progetto. Le avvertenze
@@ -1025,8 +1031,8 @@ riceve il documento non deve chiedere a te che cosa ha in mano.
 ### Sta funzionando?
 
 ```bat
-python cm_collector.py --status
-python cm_collector.py --status --host srv-claude.azienda.it --token IL-TOKEN
+python cam_collector.py --status
+python cam_collector.py --status --host srv-claude.azienda.it --token IL-TOKEN
 ```
 
 Il token serve anche qui: senza, un raccoglitore protetto risulterebbe spento invece che
@@ -1058,7 +1064,7 @@ lo storico dei mesi che ha lavorato, e cancellarli falserebbe i totali passati. 
 di conservazione:
 
 ```bat
-python cm_collector.py --dimentica anna@azienda.it --db cm-team.db --key chiavi\cm-pseudonimi.key
+python cam_collector.py --dimentica anna@azienda.it --db cam-team.db --key chiavi\cam-pseudonimi.key
 ```
 
 Cancella da tutte e tre le tabelle: telemetria, sessioni e fatturazione importata. L'indirizzo si
@@ -1068,7 +1074,7 @@ da chi lancia il comando. Senza la chiave giusta il comando **si ferma** invece 
 codice diverso e cancellare zero righe dicendo che ha finito.
 
 **Aggiornare il codice.** `git pull` nella cartella condivisa, poi riavvia gli agenti (o aspetta
-il prossimo accesso). Lo stato in `%LOCALAPPDATA%\claude-monitor\agent.json` non va toccato:
+il prossimo accesso). Lo stato in `%LOCALAPPDATA%\CodeAgentMonitor\agent.json` non va toccato:
 contiene l'identificativo della postazione e cosa è già stato spedito. Cancellarlo fa comparire
 la stessa macchina come una postazione nuova, con lo storico duplicato.
 
@@ -1088,7 +1094,7 @@ completo.
 | Una persona compare due volte | agent.json cancellato, oppure indirizzo dell'account diverso da quello in fattura |
 
 **Spegnere tutto.** Togli il blocco `env` e riavvia Claude Code, cancella i collegamenti, ferma
-il raccoglitore. L'archivio resta finché non lo cancelli: è un file, `cm-team.db`, insieme ai due
+il raccoglitore. L'archivio resta finché non lo cancelli: è un file, `cam-team.db`, insieme ai due
 file di servizio `-wal` e `-shm` che vanno cancellati con lui.
 
 ### Quanto grande può essere il gruppo
@@ -1231,7 +1237,7 @@ dentro il file vengono conservati dal pannello. **`config.json` è ignorato da g
 | | Dove |
 |---|---|
 | Piano, costo, valuta, tema, listino, statusline, switch abbonamento/API | `config.json` |
-| Periodo, filtro, scheda aperta, Live, geometria, ordinamento | `%LOCALAPPDATA%\claude-monitor\gui.json` |
+| Periodo, filtro, scheda aperta, Live, geometria, ordinamento | `%LOCALAPPDATA%\CodeAgentMonitor\gui.json` |
 
 I filtri di vista stanno separati dalla configurazione di proposito: sono comodità d'uso e non
 ha senso che finiscano in un file che potresti versionare o copiare su un'altra macchina.
@@ -1259,8 +1265,8 @@ contro gli 80–91 di `node`. I prezzi restano single-source (legge lo stesso `c
 duplica solo la formula, e `--selftest` la confronta col CLI:
 
 ```bat
-node %USERPROFILE%\.claude\hooks\cm-statusline.js --selftest a1b2c3d4
-python claude_monitor.py --session a1b2c3d4
+node %USERPROFILE%\.claude\hooks\cam-statusline.js --selftest a1b2c3d4
+python cam.py --session a1b2c3d4
 ```
 
 **Come non rompe Claude Code**: budget di 150 ms sul calcolo, timeout di 1500 ms sul processo
@@ -1300,7 +1306,7 @@ GUI, GUI con console, watch in terminale dedicato, riepilogo per progetto come b
 ## Prestazioni
 
 La prima analisi legge tutti i transcript (un file può superare i 100 MB) e salva i risultati
-[nell'archivio](#larchivio-cm-localdb), invalidati per file su `(size, mtime)`: le esecuzioni
+[nell'archivio](#larchivio-cam-localdb), invalidati per file su `(size, mtime)`: le esecuzioni
 successive sono istantanee. `--watch` e la modalità Live usano un parser **incrementale** che
 legge solo i byte aggiunti.
 
@@ -1347,6 +1353,47 @@ motivo per cui l'archivio **non** è stato messo per la velocità.
 
 ---
 
+## Se arrivi da claude-code-monitor
+
+Il progetto si chiamava `claude-code-monitor`, i suoi file `claude_monitor.py` e `cm_*`, i suoi
+dati `cm-*.db`. Il nome è cambiato quando lo strumento ha smesso di leggere solo Claude Code.
+
+**Non devi spostare niente a mano.** Alla prima esecuzione i file traslocano da soli:
+
+| prima | adesso | quando succede |
+|---|---|---|
+| `cm-local.db` | `cam-local.db` | alla prima scansione |
+| `cm-team.db` | `cam-team.db` | all'apertura del pannello o del raccoglitore |
+| `cm-pseudonimi.key` | `cam-pseudonimi.key` | quando serve la chiave |
+| `%LOCALAPPDATA%\claude-monitor\` | `…\CodeAgentMonitor\` | all'avvio di GUI e agente |
+
+Si **spostano**, non si copiano: due archivi che divergono in silenzio sono peggio di uno solo.
+Un percorso che hai scelto tu — `team.db` in `config.json`, o `--db` — non viene toccato.
+
+La chiave degli pseudonimi è quella che merita attenzione: se non venisse raccolta, il
+raccoglitore ne genererebbe una nuova senza dire niente e **ogni codice già in archivio
+diventerebbe irriconducibile alla sua persona**. Per questo il trasloco avviene prima del
+controllo che la crea.
+
+Cosa devi cambiare tu:
+
+- i **comandi**: `python cam.py`, `python cam_gui.py`, `python cam_collector.py`;
+- la **statusline**, se ce l'hai: `python install_statusline.py` la reinstalla col nome nuovo e
+  toglie quella vecchia. Finché non lo fai continua a funzionare — il segmento nuovo legge
+  anche il vecchio file di collegamento;
+- le **variabili d'ambiente**, se ne avevi impostate: da `CM_*` a `CAM_*`. Anche qui i vecchi
+  nomi continuano a essere letti, perché stanno nel tuo ambiente e non in un file che possiamo
+  aggiornare noi.
+
+Su GitHub il repository è `CodeAgentMonitor`: i cloni esistenti continuano a funzionare, perché
+GitHub reindirizza il vecchio indirizzo. Per allineare il remoto:
+
+```bat
+git remote set-url origin https://github.com/mlosavio/CodeAgentMonitor.git
+```
+
+---
+
 ## Contribuire
 
 Segnalazioni e pull request sono benvenute. Il progetto è volutamente **senza dipendenze**:
@@ -1355,14 +1402,14 @@ proposte che ne aggiungano vanno motivate. Il codice e i commenti sono in italia
 Prima di aprire una PR, controlla che il CLI non cambi comportamento:
 
 ```bat
-python claude_monitor.py --json --top 0 > prima.json
+python cam.py --json --top 0 > prima.json
 :: ... modifiche ...
-python claude_monitor.py --json --top 0 > dopo.json
+python cam.py --json --top 0 > dopo.json
 ```
 
 Le due uscite devono differire solo per `generated_at` e per le sessioni cresciute nel frattempo.
-Se tocchi la formula di costo, `node statusline/cm-statusline.js --selftest <uuid>` deve
-coincidere con `python claude_monitor.py --session <uuid>` al centesimo.
+Se tocchi la formula di costo, `node statusline/cam-statusline.js --selftest <uuid>` deve
+coincidere con `python cam.py --session <uuid>` al centesimo.
 
 Se tocchi la sorgente [Copilot](#github-copilot), `python test_copilot.py` deve restare verde.
 Meta' delle prove guardano che non venga inventato niente — costo e token restano «non noti» e
@@ -1376,7 +1423,7 @@ vuoti ci siano e valgano zero, che i rapporti si aggreghino sui token invece che
 percentuali dei singoli turni, che la mediana regga un valore anomalo, che da zero non nasca una
 variazione percentuale, e che solo gli indicatori con un verso certo possano colorarsi.
 
-Se tocchi l'[archivio](#larchivio-cm-localdb), `python test_archivio.py` deve restare verde:
+Se tocchi l'[archivio](#larchivio-cam-localdb), `python test_archivio.py` deve restare verde:
 guarda quasi solo il confine fra le due metà — che un cambio di formato del parser svuoti la
 cache e **non** l'archivio, che un transcript sparito lasci in piedi la sessione con lo stesso
 costo e gli stessi turni, che sparirne solo uno la faccia invece calare dicendo di quanto, e che

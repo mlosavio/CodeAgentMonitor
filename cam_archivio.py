@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Archivio locale di claude-monitor: `cm-local.db`.
+Archivio locale di CodeAgentMonitor: `cam-local.db`.
 
 Prende il posto di `.cache.json` e fa due mestieri che prima erano uno solo.
 
@@ -157,10 +157,36 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messaggio_fts USING fts5(
 """
 
 
+def eredita(nuovo: str, vecchio: str) -> str:
+    """Raccoglie un file lasciato dal nome precedente del progetto.
+
+    Il tool si chiamava `claude-monitor` e i suoi file `cm-*`. Cambiare nome
+    senza portarsi dietro i dati vorrebbe dire ripartire da un archivio vuoto
+    senza dirlo — e l'archivio, per le sessioni il cui transcript non c'e' piu',
+    e' l'unica copia rimasta. Si sposta, non si copia: due archivi che divergono
+    in silenzio sono peggio di uno solo.
+
+    Non fa niente se il file nuovo esiste gia' o se il vecchio non c'e'.
+    """
+    if os.path.exists(nuovo) or not os.path.exists(vecchio):
+        return nuovo
+    try:
+        os.replace(vecchio, nuovo)
+        # SQLite lascia accanto il giornale: senza, il file arriva senza le
+        # ultime scritture, cioe' danneggiato in modo non evidente.
+        for coda in ("-wal", "-shm"):
+            if os.path.exists(vecchio + coda):
+                os.replace(vecchio + coda, nuovo + coda)
+    except OSError:
+        return vecchio
+    return nuovo
+
+
 def db_path(accanto_a: str | None = None) -> str:
-    """L'archivio sta accanto allo script, come gia' `cm-team.db`."""
+    """L'archivio sta accanto allo script, come gia' `cam-team.db`."""
     base = accanto_a or os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base, "cm-local.db")
+    return eredita(os.path.join(base, "cam-local.db"),
+                   os.path.join(base, "cm-local.db"))
 
 
 def chiave(path: str) -> str:

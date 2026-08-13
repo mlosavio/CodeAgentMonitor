@@ -1,5 +1,5 @@
 {
-  "_": "Configurazione di claude-code-monitor. Copia questo file in config.json e modificalo: config.json e' ignorato da git, cosi' i tuoi dati restano tuoi. Se manca o e' illeggibile il tool riparte dai default integrati senza fermarsi. Tutto e' modificabile anche dal pannello: pulsante 'Configura' nella GUI.",
+  "_": "Configurazione di CodeAgentMonitor. Copia questo file in config.json e modificalo: config.json e' ignorato da git, cosi' i tuoi dati restano tuoi. Se manca o e' illeggibile il tool riparte dai default integrati senza fermarsi. Tutto e' modificabile anche dal pannello: pulsante 'Configura' nella GUI.",
   "updated": "2026-01-01",
 
   "_billing": "COME PAGHI. 'subscription' = quota fissa mensile (Claude Pro/Max): il costo per token e' solo un riferimento, quello che paghi e' la quota. 'api' = a consumo: il costo per token E' l'addebito. Puoi anche marcare singoli progetti o sessioni come API pur restando in abbonamento, per esempio se li lanci con ANTHROPIC_API_KEY.",
@@ -18,7 +18,7 @@
     "since": null
   },
 
-  "_team": "Scheda Persone: consumo di piu' macchine, dalla telemetria nativa di Claude Code raccolta da cm_collector.py. 'db' e' l'archivio del raccoglitore (null = cercalo accanto al pannello). 'seats' e' il numero di postazioni PAGATE: va dichiarato perche' le postazioni dormienti sono invisibili alla telemetria — chi non usa lo strumento non manda nulla, quindi non compare da nessuna parte. 'fee_per_seat' e' la quota mensile per postazione. Lasciare seats a 0 spegne le colonne di spesa e mostra solo il consumo.",
+  "_team": "Scheda Persone: consumo di piu' macchine, dalla telemetria nativa di Claude Code raccolta da cam_collector.py. 'db' e' l'archivio del raccoglitore (null = cercalo accanto al pannello). 'seats' e' il numero di postazioni PAGATE: va dichiarato perche' le postazioni dormienti sono invisibili alla telemetria — chi non usa lo strumento non manda nulla, quindi non compare da nessuna parte. 'fee_per_seat' e' la quota mensile per postazione. Lasciare seats a 0 spegne le colonne di spesa e mostra solo il consumo.",
   "team": {
     "db": null,
     "seats": 0,
@@ -31,7 +31,7 @@
     "enabled": true
   },
 
-  "_archivio": "L'archivio locale (cm-local.db). I numeri di sessioni e turni ci finiscono sempre: servono a rileggerli senza riscansionare, e a non perderli quando Claude Code cancella i transcript vecchi (cleanupPeriodDays). 'testo' invece riguarda il CONTENUTO delle conversazioni — le tue domande e le risposte, non i risultati degli strumenti. Acceso, una conversazione resta leggibile e cercabile anche dopo che il suo transcript e' sparito; e vuol dire tenere quel testo su disco, che e' una decisione, per cui il predefinito e' spento. Accenderlo fa rileggere tutti i transcript una volta. Per tornare indietro: 'python claude_monitor.py --dimentica-testo'.",
+  "_archivio": "L'archivio locale (cam-local.db). I numeri di sessioni e turni ci finiscono sempre: servono a rileggerli senza riscansionare, e a non perderli quando Claude Code cancella i transcript vecchi (cleanupPeriodDays). 'testo' invece riguarda il CONTENUTO delle conversazioni — le tue domande e le risposte, non i risultati degli strumenti. Acceso, una conversazione resta leggibile e cercabile anche dopo che il suo transcript e' sparito; e vuol dire tenere quel testo su disco, che e' una decisione, per cui il predefinito e' spento. Accenderlo fa rileggere tutti i transcript una volta. Per tornare indietro: 'python cam.py --dimentica-testo'.",
   "archivio": {
     "testo": false
   },

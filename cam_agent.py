@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-cm-agent — porta nell'archivio del raccoglitore quello che la telemetria non sa.
+cam-agent — porta nell'archivio del raccoglitore quello che la telemetria non sa.
 
 La telemetria nativa di Claude Code copre il flusso vivo, ma parte dal giorno in
 cui la si accende e non conosce l'abbonamento: il suo costo e' il valore a
 listino API. Sul disco pero' ci sono gia' i transcript di mesi, e da quelli il
-parser di claude_monitor.py ricava anche la spesa reale.
+parser di cam.py ricava anche la spesa reale.
 
 Questo agente li rilegge a intervalli, calcola la differenza rispetto a quanto
 gia' spedito e manda solo quella. Non apre porte, non resta in ascolto: parla
 solo lui, verso il raccoglitore. Funziona quindi identico in sede, in VPN e su
 un portatile fuori rete.
 
-    python cm_agent.py --once                    # un invio solo, poi esce
-    python cm_agent.py                           # resta e rispedisce ogni 15 min
-    python cm_agent.py --dry-run                 # mostra cosa spedirebbe
-    python cm_agent.py --show-payload            # stampa il JSON esatto
-    python cm_agent.py --reset                   # dimentica cosa ha gia' spedito
+    python cam_agent.py --once                    # un invio solo, poi esce
+    python cam_agent.py                           # resta e rispedisce ogni 15 min
+    python cam_agent.py --dry-run                 # mostra cosa spedirebbe
+    python cam_agent.py --show-payload            # stampa il JSON esatto
+    python cam_agent.py --reset                   # dimentica cosa ha gia' spedito
 
 COSA ESCE DA QUESTA MACCHINA
     Solo i campi elencati in CAMPI_SPEDITI: numeri, identificativi e il nome del
@@ -41,7 +41,7 @@ import time
 import urllib.error
 import urllib.request
 
-import claude_monitor as cm
+import cam
 
 __version__ = "0.1.0"
 
@@ -166,9 +166,18 @@ def id_macchina(stato: dict, path_stato: str | None = None) -> str:
 
 def percorso_stato() -> str:
     base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/.config")
-    cartella = os.path.join(base, "claude-monitor")
+    cartella = os.path.join(base, "CodeAgentMonitor")
     os.makedirs(cartella, exist_ok=True)
-    return os.path.join(cartella, "agent.json")
+    nuovo = os.path.join(cartella, "agent.json")
+    # La cartella si chiamava `claude-monitor`. Qui dentro c'e' l'elenco di
+    # cosa e' gia' stato spedito: perderlo vuol dire rimandare tutto da capo.
+    vecchio = os.path.join(base, "claude-monitor", "agent.json")
+    if not os.path.exists(nuovo) and os.path.exists(vecchio):
+        try:
+            os.replace(vecchio, nuovo)
+        except OSError:
+            return vecchio
+    return nuovo
 
 
 def carica_stato(path: str) -> dict:
@@ -226,10 +235,10 @@ def un_giro(args, config: dict, stato: dict, path_stato: str) -> bool:
     ident = identita_account()
     macchina = id_macchina(stato, path_stato)
 
-    sessioni = cm.collect(args.base, config, True, args.idle_gap, None, True, None)
-    cm.allocate_real_cost(sessioni, config)
+    sessioni = cam.collect(args.base, config, True, args.idle_gap, None, True, None)
+    cam.allocate_real_cost(sessioni, config)
     for s in sessioni:
-        s["billing"] = cm.session_billing(s, config)
+        s["billing"] = cam.session_billing(s, config)
 
     nuove = da_spedire(sessioni, stato["inviate"])
     if not nuove:
@@ -237,7 +246,7 @@ def un_giro(args, config: dict, stato: dict, path_stato: str) -> bool:
         return True
 
     payload = {
-        "agent": f"cm-agent/{__version__}",
+        "agent": f"cam-agent/{__version__}",
         "machine": macchina,
         "user": ident["user"],
         "attrs": {k: v for k, v in {
@@ -245,7 +254,7 @@ def un_giro(args, config: dict, stato: dict, path_stato: str) -> bool:
             "user.account_uuid": ident["account_uuid"],
             "organization.id": ident["organization"],
         }.items() if v},
-        "currency": cm.display_currency(config),
+        "currency": cam.display_currency(config),
         # L'identita' sta nella busta una volta sola, non ripetuta in ogni
         # sessione: il raccoglitore la prende da qui.
         "sessions": [payload_sessione(s) for s in nuove],
@@ -314,7 +323,7 @@ def print_service(endpoint: str, token: str | None, interval: float) -> None:
         print()
         print("  $s = (New-Object -ComObject WScript.Shell).CreateShortcut(")
         print("      (Join-Path ([Environment]::GetFolderPath('Startup')) "
-              "'cm-agent.lnk'))")
+              "'cam-agent.lnk'))")
         print(f"  $s.TargetPath       = '{pyw}'")
         print(f"  $s.Arguments        = '{args}'")
         print(f"  $s.WorkingDirectory = '{qui}'")
@@ -323,7 +332,7 @@ def print_service(endpoint: str, token: str | None, interval: float) -> None:
         print("  per toglierlo, cancella il collegamento:  explorer shell:startup")
     else:
         print("Linux o macOS — unita' utente systemd in")
-        print("~/.config/systemd/user/cm-agent.service:")
+        print("~/.config/systemd/user/cam-agent.service:")
         print()
         print("  [Unit]")
         print("  Description=Agente storico Claude Code")
@@ -333,13 +342,21 @@ def print_service(endpoint: str, token: str | None, interval: float) -> None:
         print("  [Install]")
         print("  WantedBy=default.target")
         print()
-        print("  systemctl --user enable --now cm-agent")
+        print("  systemctl --user enable --now cam-agent")
         print("  loginctl enable-linger $USER   # perche' giri anche a sessione chiusa")
     print()
+    # Chi aveva installato l'avvio automatico col nome vecchio si ritroverebbe
+    # due agenti che spediscono la stessa cosa. Il raccoglitore scarta i
+    # duplicati, ma due processi accesi per sbaglio vanno detti.
+    print("Se avevi gia' l'avvio automatico da quando si chiamava claude-monitor,")
+    if os.name == "nt":
+        print("togli il vecchio collegamento:  explorer shell:startup  ->  cm-agent.lnk")
+    else:
+        print("disattiva la vecchia unita':  systemctl --user disable --now cm-agent")
     if token:
         print("Il token compare nel comando, quindi e' leggibile da chi usa la")
         print("postazione. Va bene: autorizza a scrivere nell'archivio, non a")
-        print("leggerlo. Se questo non basta, mettilo nella variabile CM_TOKEN")
+        print("leggerlo. Se questo non basta, mettilo nella variabile CAM_TOKEN")
         print("e togli --token dalla riga qui sopra.")
     else:
         print("Nessun token: va bene solo se il raccoglitore ascolta in locale.")
@@ -349,10 +366,10 @@ def print_service(endpoint: str, token: str | None, interval: float) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Manda al raccoglitore le sessioni ricavate dai transcript.")
-    ap.add_argument("--endpoint", default=os.environ.get(
-        "CM_ENDPOINT", "http://127.0.0.1:4318"),
-        help="indirizzo del raccoglitore (o variabile CM_ENDPOINT)")
-    ap.add_argument("--token", default=os.environ.get("CM_TOKEN"),
+    ap.add_argument("--endpoint", default=os.environ.get("CAM_ENDPOINT")
+        or os.environ.get("CM_ENDPOINT") or "http://127.0.0.1:4318",
+        help="indirizzo del raccoglitore (o variabile CAM_ENDPOINT)")
+    ap.add_argument("--token", default=os.environ.get("CAM_TOKEN") or os.environ.get("CM_TOKEN"),
                     help="token condiviso, se il raccoglitore lo richiede")
     ap.add_argument("--base", default=None, help="cartella dei transcript")
     ap.add_argument("--config", default=None, help="file di configurazione")
@@ -375,11 +392,11 @@ def main(argv=None) -> int:
         print_service(args.endpoint, args.token, args.interval)
         return 0
 
-    config = cm.load_config(args.config)
+    config = cam.load_config(args.config)
     if args.base is None:
-        args.base = cm.default_base()
+        args.base = cam.default_base()
     if args.idle_gap is None:
-        args.idle_gap = float((cm.defaults_of(config) or {}).get("idle_gap", 300))
+        args.idle_gap = float((cam.defaults_of(config) or {}).get("idle_gap", 300))
 
     path_stato = percorso_stato()
     stato = carica_stato(path_stato)
@@ -388,7 +405,7 @@ def main(argv=None) -> int:
         salva_stato(path_stato, stato)
         print("stato azzerato: al prossimo invio riparte da tutto lo storico")
 
-    print(f"cm-agent {__version__} → {args.endpoint}")
+    print(f"cam-agent {__version__} → {args.endpoint}")
     print(f"  postazione {id_macchina(stato, path_stato)}")
     print(f"  stato      {path_stato}")
     print()

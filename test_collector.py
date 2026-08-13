@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Prove di non regressione per cm_collector.
+Prove di non regressione per cam_collector.
 
 Coprono i tre punti dove il conteggio si sbaglia facilmente e il confine di
 riservatezza, che e' l'unica garanzia che si puo' esibire in sede di verifica.
@@ -18,7 +18,7 @@ import os
 import sys
 import tempfile
 
-import cm_collector as cc
+import cam_collector as cc
 
 try:  # console Windows: senza questo l'output rediretto muore sugli accenti
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -343,10 +343,10 @@ verifica("cancellazione senza chiave: non ha tolto niente",
 
 # --------------------------------------------------------------------------- #
 
-print("\nConfine di cio' che esce dalla macchina (cm_agent)")
+print("\nConfine di cio' che esce dalla macchina (cam_agent)")
 print("-" * 72)
 
-import cm_agent as ca
+import cam_agent as ca
 
 
 

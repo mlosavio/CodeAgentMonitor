@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-claude-monitor — interfaccia grafica (Tkinter, solo stdlib).
+CodeAgentMonitor — interfaccia grafica (Tkinter, solo stdlib).
 
-Cruscotto desktop sopra `claude_monitor.py`: riusa la stessa logica di scansione,
+Cruscotto desktop sopra `cam.py`: riusa la stessa logica di scansione,
 deduplica e calcolo del costo, quindi i numeri coincidono col CLI alla cifra.
 
-    python  claude_monitor_gui.py          con console (per i traceback)
-    pythonw claude_monitor_gui.py          senza console
+    python  cam_gui.py          con console (per i traceback)
+    pythonw cam_gui.py          senza console
 
 Nessuna dipendenza esterna. Vedi README.md.
 
@@ -22,8 +22,8 @@ import os
 import sys
 
 # --------------------------------------------------------------------------- #
-# Prologo: DEVE stare prima di importare claude_monitor.
-# Con pythonw.exe stdout/stderr sono None; claude_monitor scrive su stderr in
+# Prologo: DEVE stare prima di importare cam.
+# Con pythonw.exe stdout/stderr sono None; cam scrive su stderr in
 # warn()/info() e legge sys.stdout.encoding al momento dell'import.
 # --------------------------------------------------------------------------- #
 if sys.stdout is None:
@@ -46,10 +46,10 @@ import tkinter.font as tkfont
 import traceback
 from tkinter import filedialog, messagebox
 
-import claude_monitor as cm  # NON chiamare mai cm.init_color(): inietterebbe ANSI
-import cm_statistiche as cm_stat
+import cam  # NON chiamare mai cam.init_color(): inietterebbe ANSI
+import cam_statistiche as cam_stat
 
-APP_TITLE = "claude-monitor"
+APP_TITLE = "CodeAgentMonitor"
 LIVE_INTERVAL = 2.0
 LIVE_REDISCOVER = 5
 PUMP_MS = 80
@@ -194,24 +194,24 @@ class Fmt:
 
     @classmethod
     def cost(cls, value: float) -> str:
-        s = cm.h_cost(value)
+        s = cam.h_cost(value)
         return s.translate(_IT_TRANS) if cls.italian else s
 
     @staticmethod
     def tokens(n: int) -> str:
-        return cm.h_tokens(n)
+        return cam.h_tokens(n)
 
     @staticmethod
     def dur(seconds) -> str:
-        return cm.h_dur(seconds)
+        return cam.h_dur(seconds)
 
     @staticmethod
     def time(epoch) -> str:
-        return cm.h_time(epoch)
+        return cam.h_time(epoch)
 
     @staticmethod
     def ago(epoch) -> str:
-        return cm.h_ago(epoch)
+        return cam.h_ago(epoch)
 
 
 # Valuta dell'abbonamento: impostata all'avvio da pricing.json.
@@ -221,7 +221,7 @@ SUB_CURRENCY = ""
 def archivio_conteggi() -> dict:
     """Quanto c'e' dentro l'archivio. {} se non e' apribile: il pannello di
     configurazione deve aprirsi comunque."""
-    arch = cm.apri_archivio_lettura()
+    arch = cam.apri_archivio_lettura()
     if arch is None:
         return {}
     try:
@@ -230,6 +230,27 @@ def archivio_conteggi() -> dict:
         return {}
     finally:
         arch.chiudi()
+
+
+def stato_gui() -> str:
+    """Dove sta la geometria della finestra e le preferenze di vista.
+
+    La cartella si chiamava `claude-monitor`: se quel file c'e' ancora lo si
+    porta di la'. Non e' un dato importante — sono ordinamenti e dimensioni —
+    ma ritrovarsi la finestra spostata dopo un aggiornamento fa pensare che
+    qualcos'altro sia andato perso.
+    """
+    base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+    nuovo = os.path.join(base, "CodeAgentMonitor", "gui.json")
+    vecchio = os.path.join(base, "claude-monitor", "gui.json")
+    if not os.path.exists(nuovo) and os.path.exists(vecchio):
+        try:
+            os.makedirs(os.path.dirname(nuovo), exist_ok=True)
+            os.replace(vecchio, nuovo)
+            os.rmdir(os.path.dirname(vecchio))
+        except OSError:
+            return vecchio
+    return nuovo
 
 
 def stato_archivio(conteggi: dict) -> str:
@@ -252,7 +273,7 @@ def stato_archivio(conteggi: dict) -> str:
     if peso.get("file"):
         voci = peso.get("parti") or {}
         grossa = max(voci, key=voci.get) if voci else ""
-        parti.append(f" Occupa {cm.h_byte(peso['file'])}"
+        parti.append(f" Occupa {cam.h_byte(peso['file'])}"
                      + (f", per lo più {grossa}." if grossa else "."))
     return "".join(parti)
 
@@ -288,7 +309,7 @@ def MONEY(value: float) -> str:
     """Costo reale, nella valuta con cui paghi l'abbonamento."""
     if not SUB_CURRENCY:
         return "—"
-    s = cm.money(value, SUB_CURRENCY)
+    s = cam.money(value, SUB_CURRENCY)
     return s.translate(_IT_TRANS) if Fmt.italian else s
 
 
@@ -500,7 +521,7 @@ def read_plan_limits(warn_stale_min=60):
         expired = False
         resets = w.get("resets_at")
         if isinstance(resets, str):
-            ts = cm.parse_ts(resets)
+            ts = cam.parse_ts(resets)
             # finestra già girata: la percentuale registrata non vale più niente
             expired = bool(ts and ts < now)
         out[key] = {"pct": float(w["utilization"]), "resets_at": resets,
@@ -1007,7 +1028,7 @@ def active_from_session_records(base: str) -> tuple[str | None, str | None]:
             continue
         stamp = rec.get("updatedAt") or rec.get("startedAt") or 0
         if isinstance(stamp, str):
-            stamp = cm.parse_ts(stamp) or 0
+            stamp = cam.parse_ts(stamp) or 0
         if best is None or stamp > best[0]:
             best = (stamp, rec)
     if best is None:
@@ -1026,7 +1047,7 @@ def active_from_mtime(base: str) -> str | None:
             newest, target = mt, path
     if target is None:
         return None
-    return main_transcript_for(base, cm.session_id_from_path(target)) or target
+    return main_transcript_for(base, cam.session_id_from_path(target)) or target
 
 
 def find_active_transcript(base: str) -> tuple[str | None, str | None]:
@@ -1050,7 +1071,7 @@ def aggregate_by_project(sessions: list[dict]) -> list[dict]:
             p = agg[key] = {
                 "project": key, "sessions": 0, "user_prompts": 0, "assistant_msgs": 0,
                 "tool_calls": 0, "duration": 0.0, "active": 0.0, "cost": 0.0,
-                "real": 0.0, "tokens": cm.new_tok(), "end": 0.0,
+                "real": 0.0, "tokens": cam.new_tok(), "end": 0.0,
             }
         p["sessions"] += 1
         p["user_prompts"] += s["user_prompts"]
@@ -1060,7 +1081,7 @@ def aggregate_by_project(sessions: list[dict]) -> list[dict]:
         p["active"] += s["active"]
         p["cost"] += s["cost"]
         p["real"] += s.get("real_cost", 0.0)
-        cm.add_tok(p["tokens"], s["tokens"])
+        cam.add_tok(p["tokens"], s["tokens"])
         p["end"] = max(p["end"], s["end"] or 0)
     for p in agg.values():
         p["real_txt"] = MONEY(p["real"])
@@ -1074,9 +1095,9 @@ def aggregate_by_month(sessions: list[dict], pricing: dict) -> list[dict]:
     mesi contribuisce a entrambi nella giusta proporzione.
     """
     # il rapporto incrocia due valute solo se l'abbonamento non è in dollari
-    rate = 1.0 if (cm.display_currency(pricing) or "USD").upper() == "USD" \
-        else cm.fx_usd_per_unit(pricing)
-    api_mode = (cm.billing_of(pricing).get("mode") or "subscription").lower() == "api"
+    rate = 1.0 if (cam.display_currency(pricing) or "USD").upper() == "USD" \
+        else cam.fx_usd_per_unit(pricing)
+    api_mode = (cam.billing_of(pricing).get("mode") or "subscription").lower() == "api"
     agg: dict[str, dict] = {}
     for s in sessions:
         for month, models in (s.get("per_month") or {}).items():
@@ -1137,8 +1158,8 @@ SESSION_COLUMNS = [
     ("title",    "Titolo",   240, "w", lambda r: (r["title"] or r["first_prompt"] or "").lower(),
      lambda r: (("▪ " if r.get("archiviata") else "")
                 + (r["title"] or r["first_prompt"] or "—"))),
-    ("fonte",    "Fonte",     90, "w", lambda r: cm.fonte_di(r),
-     lambda r: cm.ETICHETTA_FONTE.get(cm.fonte_di(r), cm.fonte_di(r))),
+    ("fonte",    "Fonte",     90, "w", lambda r: cam.fonte_di(r),
+     lambda r: cam.ETICHETTA_FONTE.get(cam.fonte_di(r), cam.fonte_di(r))),
     ("cost",     "Se fosse API", 105, "e", lambda r: r["cost"], lambda r: costo(r)),
     ("share",    "Quota del consumo", 150, "e", lambda r: r["cost"], lambda r: ""),
     ("start",    "Inizio",    95, "e", lambda r: r["start"] or 0, lambda r: Fmt.time(r["start"])),
@@ -1160,8 +1181,8 @@ TRACE_COLUMNS = [
                 + (r["prompt"] or "(prima del primo prompt)"))),
     ("project",  "Progetto",  115, "w", lambda r: (r["project"] or "").lower(),
      lambda r: r["project"]),
-    ("fonte",    "Fonte",      85, "w", lambda r: cm.fonte_di(r),
-     lambda r: cm.ETICHETTA_FONTE.get(cm.fonte_di(r), cm.fonte_di(r))),
+    ("fonte",    "Fonte",      85, "w", lambda r: cam.fonte_di(r),
+     lambda r: cam.ETICHETTA_FONTE.get(cam.fonte_di(r), cam.fonte_di(r))),
     ("cost",     "Se fosse API", 105, "e", lambda r: r["cost"],
      lambda r: costo(r)),
     ("share",    "Quota del consumo", 130, "e", lambda r: r["cost"], lambda r: ""),
@@ -1223,7 +1244,7 @@ TEAM_COLUMNS = [
 
 
 # Come si chiamano a schermo i due casi anomali. I nomi tecnici stanno in
-# cm_collector.ANOMALIE; qui c'e' la frase che si legge nel pannello.
+# cam_collector.ANOMALIE; qui c'e' la frase che si legge nel pannello.
 # Corte apposta: stanno su una riga gia' piena, accanto al resto del riepilogo.
 ANOMALIE_TXT = {
     "non_in_fattura":  "fuori fattura",
@@ -1233,12 +1254,14 @@ ANOMALIE_TXT = {
 
 def team_db_candidates(config: dict) -> list[str]:
     """Dove cercare l'archivio del raccoglitore, in ordine di precedenza."""
-    fuori = os.environ.get("CM_TEAM_DB")
+    # CM_TEAM_DB e' il nome di prima del rename: sta nell'ambiente di chi l'ha
+    # impostata, che non e' un file che possiamo aggiornare noi.
+    fuori = os.environ.get("CAM_TEAM_DB") or os.environ.get("CM_TEAM_DB")
     scelto = ((config.get("team") or {}).get("db")) if config else None
     return [p for p in (fuori, scelto,
                         os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                     "cm-team.db"),
-                        "cm-team.db") if p]
+                                     "cam-team.db"),
+                        "cam-team.db") if p]
 
 
 def fmt_ratio(value: float) -> str:
@@ -1271,20 +1294,23 @@ def load_team_rows(config: dict, since: float | None = None):
     vuota sembra un guasto.
     """
     try:
-        import cm_collector
+        import cam_collector
     except ImportError:
-        return [], None, "cm_collector.py non trovato accanto al pannello", {}, []
+        return [], None, "cam_collector.py non trovato accanto al pannello", {}, []
 
     for path in team_db_candidates(config):
+        # L'archivio del raccoglitore si chiamava cm-team.db: se e' rimasto
+        # indietro col nome, va raccolto prima di dire che non c'e'.
+        path = cam_collector.eredita(path)
         if not os.path.isfile(path):
             continue
         try:
-            store = cm_collector.Store(path)          # sola lettura
-            righe = cm_collector.team_rows(store, since)
-            mesi = cm_collector.observed_months(store, since)[0]
+            store = cam_collector.Store(path)          # sola lettura
+            righe = cam_collector.team_rows(store, since)
+            mesi = cam_collector.observed_months(store, since)[0]
             # L'andamento dell'adozione esce dalla stessa apertura: e' una sola
             # lettura in piu' sulla tabella delle sessioni.
-            adozione = cm_stat.adozione_team(store.con, "mese")
+            adozione = cam_stat.adozione_team(store.con, "mese")
             store.con.close()
         except Exception as exc:                      # archivio illeggibile
             return [], None, f"archivio non leggibile: {exc}", {}, []
@@ -1293,8 +1319,8 @@ def load_team_rows(config: dict, since: float | None = None):
                                      "il raccoglitore non ha ricevuto dati"), {}, []
 
         team = config.get("team") or {}
-        righe, riepilogo = cm_collector.team_costs(
-            righe, team, mesi, cm.fx_usd_per_unit(config))
+        righe, riepilogo = cam_collector.team_costs(
+            righe, team, mesi, cam.fx_usd_per_unit(config))
         valuta = riepilogo["currency"]
         for r in righe:
             r["paid_txt"] = team_money(r["paid"], valuta) if r["paid"] else "—"
@@ -1304,13 +1330,13 @@ def load_team_rows(config: dict, since: float | None = None):
         return righe, store.level, "", riepilogo, adozione
 
     return [], None, ("nessun archivio di team: avvia il raccoglitore con "
-                      "python cm_collector.py"), {}, []
+                      "python cam_collector.py"), {}, []
 
 
 # Spiegazioni al passaggio del mouse sull'intestazione.
 def build_help(pricing: dict, totals: dict) -> dict:
-    api = cm.cost_columns(pricing)[1] is None
-    sub = cm.subscription_of(pricing)
+    api = cam.cost_columns(pricing)[1] is None
+    sub = cam.subscription_of(pricing)
     quota = MONEY(float(sub["monthly_cost"])) if sub else "la quota"
     pagato = MONEY(totals.get("real", 0.0))
     if api:
@@ -1440,7 +1466,7 @@ class DetailWindow(tk.Toplevel):
 
         cols = [
             ("time",  "Ora",       75, "w", lambda r: r["ts"] or 0,
-             lambda r: cm.h_time(r["ts"], "%H:%M:%S")),
+             lambda r: cam.h_time(r["ts"], "%H:%M:%S")),
             ("model", "Modello",  150, "w", lambda r: r["model"],
              lambda r: r["model"] + ("  ·sub" if r["subagent"] else "")),
             ("what",  "Tool / testo", 300, "w", lambda r: r["what"], lambda r: r["what"]),
@@ -1498,7 +1524,7 @@ class DetailWindow(tk.Toplevel):
             return
         title = (self.session_full.get("title") or "conversazione")
         safe = "".join(ch if ch.isalnum() or ch in " -_" else "-" for ch in title)[:60]
-        when = cm.h_time(self.session_full.get("start"), "%Y-%m-%d")
+        when = cam.h_time(self.session_full.get("start"), "%Y-%m-%d")
         path = filedialog.asksaveasfilename(
             parent=self, title="Esporta la conversazione", defaultextension=".md",
             initialfile=f"{when} {safe}.md".strip(),
@@ -1506,7 +1532,7 @@ class DetailWindow(tk.Toplevel):
         if not path:
             return
         try:
-            text = cm.conversation_markdown(self.session_full, self.messages,
+            text = cam.conversation_markdown(self.session_full, self.messages,
                                             self.app.pricing)
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(text)
@@ -1518,11 +1544,11 @@ class DetailWindow(tk.Toplevel):
         try:
             pricing, base = self.app.pricing, self.app.base
             main = main_transcript_for(base, self.session["session_id"])
-            files = cm.session_files_from_transcript(main) if main else self.session["files"]
+            files = cam.session_files_from_transcript(main) if main else self.session["files"]
             if not files:
                 # Transcript sparito: resta l'archivio, che ha i numeri e — se
                 # e' stato acceso — anche quello che ci si e' detti.
-                sess, messages = cm.conversazione_archiviata(self.session["session_id"])
+                sess, messages = cam.conversazione_archiviata(self.session["session_id"])
                 if not sess:
                     self.q.put(("error", "di questa sessione non resta niente: "
                                          "il transcript non c'e' piu' e l'archivio "
@@ -1531,19 +1557,19 @@ class DetailWindow(tk.Toplevel):
                 self.q.put(("chat", sess, messages))
                 self.q.put(("ok", sess, self._righe(messages, pricing)))
                 return
-            sess = cm.new_session(self.session["session_id"])
+            sess = cam.new_session(self.session["session_id"])
             messages = []
             for path in files:
-                rec = cm.scan_file(path, pricing, keep_messages=True)
+                rec = cam.scan_file(path, pricing, keep_messages=True)
                 try:
                     mtime = os.path.getmtime(path)
                 except OSError:
                     mtime = 0.0
-                cm.merge_record(sess, rec, mtime)
+                cam.merge_record(sess, rec, mtime)
                 for m in rec.get("messages", []):
                     m["subagent"] = rec["is_subagent"]
                     messages.append(m)
-            cm.finalize(sess, pricing, self.app.idle_gap)
+            cam.finalize(sess, pricing, self.app.idle_gap)
             messages.sort(key=lambda m: (m["ts"] is None, m["ts"] or 0))
             self.q.put(("chat", sess, messages))
 
@@ -1556,10 +1582,10 @@ class DetailWindow(tk.Toplevel):
         for m in messages:
             if m["kind"] == "prompt":
                 rows.append({"ts": m["ts"], "model": "tu", "subagent": False,
-                             "prompt": True, "tok": cm.new_tok(), "cost": 0.0,
+                             "prompt": True, "tok": cam.new_tok(), "cost": 0.0,
                              "cum": running, "what": (m.get("text") or "")[:300]})
                 continue
-            cost, _ = cm.cost_of(m.get("model") or "", m["tok"], pricing)
+            cost, _ = cam.cost_of(m.get("model") or "", m["tok"], pricing)
             running += cost
             rows.append({"ts": m["ts"], "model": m.get("model") or "—",
                          "subagent": m.get("subagent", False),
@@ -1591,8 +1617,8 @@ class DetailWindow(tk.Toplevel):
         self.l_meta.config(text=(
             f"{sess['cwd'] or ''}   ·   branch {sess['git_branch'] or '—'}   ·   "
             f"Claude Code v{sess['version'] or '?'}   ·   "
-            f"{cm.h_time(sess['start'], '%d/%m/%Y %H:%M')} → "
-            f"{cm.h_time(sess['end'], '%d/%m/%Y %H:%M')}"
+            f"{cam.h_time(sess['start'], '%d/%m/%Y %H:%M')} → "
+            f"{cam.h_time(sess['end'], '%d/%m/%Y %H:%M')}"
             + (f"   ·   subagent: {agents}" if agents else "")))
         notional = (self.app.pricing.get("plan") or "").lower() == "subscription"
         self.tiles["cost"].set(Fmt.cost(sess["cost"]),
@@ -1787,7 +1813,7 @@ class ChatView(tk.Frame):
                 pending.clear()
 
         for m in visible:
-            when = cm.h_time(m.get("ts"), "%d/%m %H:%M")
+            when = cam.h_time(m.get("ts"), "%d/%m %H:%M")
             if m["kind"] == "prompt":
                 flush()
                 t.insert("end", f"Tu · {when}\n", "you")
@@ -1859,7 +1885,7 @@ class TrendChart(tk.Frame):
                          highlightbackground=theme["border"])
         self.t = theme
         self.punti: list[dict] = []
-        self.metrica = cm_stat.METRICHE[0]
+        self.metrica = cam_stat.METRICHE[0]
         self.riferimento = None       # (valore, etichetta): una riga di confronto
         self.dettaglio = None         # riga in piu' nel tooltip
         self.hover = -1
@@ -1945,7 +1971,7 @@ class TrendChart(tk.Frame):
             if not (y0 - 1 <= y <= y1 + 1):
                 continue
             c.create_line(x0, y, x1, y, fill=t["line"], width=1)
-            c.create_text(x0 - 8, y, text=cm.fmt_stat(v, self.metrica["formato"]),
+            c.create_text(x0 - 8, y, text=cam.fmt_stat(v, self.metrica["formato"]),
                           anchor="e", fill=t["muted"], font=t.f_small)
 
         # etichette dell'asse dei tempi, diradate finche' non si sovrappongono
@@ -2015,10 +2041,10 @@ class TrendChart(tk.Frame):
                           outline=t["surface"], width=2)
             if dove == "fine":
                 c.create_text(x + 12, y, anchor="w", fill=t["ink"], font=t.f_body_bold,
-                              text=cm.fmt_stat(valori[i], self.metrica["formato"]))
+                              text=cam.fmt_stat(valori[i], self.metrica["formato"]))
             elif i != ultimo:
                 c.create_text(x, y - 12, anchor="s", fill=t["ink2"], font=t.f_small,
-                              text=cm.fmt_stat(valori[i], self.metrica["formato"]))
+                              text=cam.fmt_stat(valori[i], self.metrica["formato"]))
 
         self._geo = (x0, x1, y0, y1, vmin, vmax)
 
@@ -2059,10 +2085,10 @@ class TrendChart(tk.Frame):
         p = self.punti[i]
         v = p.get(self.metrica["key"])
         extra = self.dettaglio(p) if self.dettaglio else (
-            f"{p['turni']} turni · {cm.h_cost(p['costo'])} · "
+            f"{p['turni']} turni · {cam.h_cost(p['costo'])} · "
             f"{p['progetti']} progetti")
         testo = (f"{p['etichetta']}\n"
-                 f"{self.metrica['label']}: {cm.fmt_stat(v, self.metrica['formato'])}\n"
+                 f"{self.metrica['label']}: {cam.fmt_stat(v, self.metrica['formato'])}\n"
                  f"{extra}")
         self.tip.show(("trend", i), testo,
                       self.canvas.winfo_rootx() + ev.x + 16,
@@ -2104,7 +2130,7 @@ class KpiTile(tk.Frame):
 
     def set(self, k: dict):
         self.l_label.config(text=k["label"].upper())
-        self.l_value.config(text=cm.fmt_stat(k["valore"], k["formato"]))
+        self.l_value.config(text=cam.fmt_stat(k["valore"], k["formato"]))
         d = k["delta"]
         if d is None:
             self.l_delta.config(text="", fg=self.t["muted"])
@@ -2117,7 +2143,7 @@ class KpiTile(tk.Frame):
         else:
             colore = self.t["muted"]
         self.l_delta.config(text=f"{freccia} {abs(100 * d):.0f}%", fg=colore)
-        self.l_prima.config(text=f"prima {cm.fmt_stat(k['precedente'], k['formato'])}")
+        self.l_prima.config(text=f"prima {cam.fmt_stat(k['precedente'], k['formato'])}")
 
 
 TREND_COLUMNS = [
@@ -2127,11 +2153,11 @@ TREND_COLUMNS = [
     ("durata_totale", "Tempo", 90, "e", lambda r: r["durata_totale"],
      lambda r: Fmt.dur(r["durata_totale"])),
     ("costo_turno", "Per turno", 90, "e", lambda r: r["costo_turno"] or 0,
-     lambda r: cm.fmt_stat(r["costo_turno"], "usd")),
+     lambda r: cam.fmt_stat(r["costo_turno"], "usd")),
     ("durata_mediana", "Mediana", 90, "e", lambda r: r["durata_mediana"] or 0,
-     lambda r: cm.fmt_stat(r["durata_mediana"], "dur")),
+     lambda r: cam.fmt_stat(r["durata_mediana"], "dur")),
     ("cache_hit", "Cache",      75, "e", lambda r: r["cache_hit"] or 0,
-     lambda r: cm.fmt_stat(r["cache_hit"], "pct")),
+     lambda r: cam.fmt_stat(r["cache_hit"], "pct")),
     ("sessioni",  "Sess",       60, "e", lambda r: r["sessioni"], lambda r: r["sessioni"]),
     ("progetti",  "Prog",       60, "e", lambda r: r["progetti"], lambda r: r["progetti"]),
     ("interrotti", "Interrotti", 85, "e", lambda r: r["interrotti"],
@@ -2155,19 +2181,19 @@ class TrendPanel(tk.Frame):
         self.punti: list[dict] = []
         self.kpi: list[dict] = []
         self.help: dict = {}
-        self.metrica = cm_stat.METRICHE[0]
+        self.metrica = cam_stat.METRICHE[0]
         self.grana = None            # None = scelta in base all'intervallo
         self.mostra_tabella = False
 
         barra = tk.Frame(self, bg=self.t["page"])
         barra.pack(fill="x", pady=(0, 8))
         self.dd_metrica = Dropdown(
-            barra, self.t, [(m["label"], m["key"]) for m in cm_stat.METRICHE],
+            barra, self.t, [(m["label"], m["key"]) for m in cam_stat.METRICHE],
             self._on_metrica, width=210)
         self.dd_metrica.set_bg(self.t["page"])
         self.dd_metrica.pack(side="left")
         self.seg_grana = Segmented(
-            barra, self.t, [g[1] for g in cm_stat.GRANULARITA], self._on_grana)
+            barra, self.t, [g[1] for g in cam_stat.GRANULARITA], self._on_grana)
         self.seg_grana.pack(side="left", padx=(10, 0))
         self.b_tab = FlatButton(barra, self.t, "Tabella", command=self._toggle,
                                 toggle=True, width=80)
@@ -2195,14 +2221,14 @@ class TrendPanel(tk.Frame):
         self.chart.pack(fill="both", expand=True)
 
         self.tiles = []
-        for i in range(len(cm_stat.INDICATORI)):
+        for i in range(len(cam_stat.INDICATORI)):
             tile = KpiTile(griglia, self.t)
             tile.grid(row=i // 5, column=i % 5, padx=(0, 8), pady=(0, 8), sticky="nsew")
             self.tiles.append(tile)
         for col in range(5):
             griglia.columnconfigure(col, weight=1)
         self.tip = Tooltip(self, self.t)
-        for tile, spec in zip(self.tiles, cm_stat.INDICATORI):
+        for tile, spec in zip(self.tiles, cam_stat.INDICATORI):
             self._spiega(tile, spec)
 
     def _spiega(self, tile, spec):
@@ -2224,7 +2250,7 @@ class TrendPanel(tk.Frame):
     # -- dati --------------------------------------------------------------- #
 
     def set_data(self, turni: list[dict]):
-        iv = cm_stat.intervallo(turni)
+        iv = cam_stat.intervallo(turni)
         if iv is None:
             self.punti, self.kpi = [], []
             self.chart.set_data([], self.metrica)
@@ -2237,19 +2263,19 @@ class TrendPanel(tk.Frame):
                           "delta": None, "verso": None, "precedente": None})
             return
 
-        grana = self.grana or cm_stat.grana_consigliata(*iv)
-        for i, g in enumerate(cm_stat.GRANULARITA):
+        grana = self.grana or cam_stat.grana_consigliata(*iv)
+        for i, g in enumerate(cam_stat.GRANULARITA):
             if g[0] == grana:
                 self.seg_grana.select(i, fire=False)
-        self.punti = cm_stat.serie(turni, grana)
+        self.punti = cam_stat.serie(turni, grana)
 
         giorni = {"giorno": 7, "settimana": 28, "mese": 90}[grana]
         fine = iv[1] + dt.timedelta(days=1)
         inizio = fine - dt.timedelta(days=giorni)
         t0 = dt.datetime.combine(inizio, dt.time.min).timestamp()
         recenti = [t for t in turni if t.get("ts") and t["ts"] >= t0]
-        prec = cm_stat.finestra_precedente(turni, inizio, fine)
-        self.kpi = cm_stat.indicatori(recenti, prec, turni)
+        prec = cam_stat.finestra_precedente(turni, inizio, fine)
+        self.kpi = cam_stat.indicatori(recenti, prec, turni)
 
         self.l_periodo.config(
             text=f"dal {iv[0].strftime('%d/%m/%Y')} al {iv[1].strftime('%d/%m/%Y')}")
@@ -2273,11 +2299,11 @@ class TrendPanel(tk.Frame):
     # -- comandi ------------------------------------------------------------ #
 
     def _on_metrica(self, key):
-        self.metrica = cm_stat.METRICA[key]
+        self.metrica = cam_stat.METRICA[key]
         self.chart.set_data(self.punti, self.metrica)
 
     def _on_grana(self, index):
-        scelta = cm_stat.GRANULARITA[index][0]
+        scelta = cam_stat.GRANULARITA[index][0]
         if scelta == self.grana:
             return
         self.grana = scelta
@@ -2338,7 +2364,7 @@ class TeamPanel(tk.Frame):
             punti, METRICA_ADOZIONE,
             riferimento=((seats, f"{seats} pagate") if seats else None),
             dettaglio=lambda p: (f"{p['sessioni']} sessioni · "
-                                 f"{cm.h_cost(p['costo'])} a listino"))
+                                 f"{cam.h_cost(p['costo'])} a listino"))
         if not self.chart.winfo_ismapped():
             self.chart.pack(fill="x", side="top", pady=(0, 10), before=self.tabella)
 
@@ -2607,7 +2633,7 @@ class TraceWindow(tk.Toplevel):
 
     def _worker(self):
         try:
-            sess, trace, spans, msgs = cm.load_trace(
+            sess, trace, spans, msgs = cam.load_trace(
                 self.app.base, self.row["session_id"], self.row["n"],
                 self.app.pricing, self.app.idle_gap)
             self.q.put(("ok", (sess, trace, spans, msgs)))
@@ -2637,11 +2663,11 @@ class TraceWindow(tk.Toplevel):
         self.l_meta.config(text=(
             f"{sess.get('project') or '?'}   ·   sessione {sess['session_id'][:8]}"
             f"   ·   turno {trace['n']} di {sess.get('traces_n', 0)}"
-            f"   ·   {cm.h_time(trace['ts'], '%d/%m/%Y %H:%M:%S')}"
+            f"   ·   {cam.h_time(trace['ts'], '%d/%m/%Y %H:%M:%S')}"
             + ("   ·   interrotto da te" if trace["interrupted"] else "")
             + (f"   ·   {trace['subagents']} subagent" if trace["subagents"] else "")))
 
-        notional = cm.cost_columns(self.app.pricing)[1] is not None
+        notional = cam.cost_columns(self.app.pricing)[1] is not None
         self.tiles["cost"].set(Fmt.cost(trace["cost"]),
                                "non pagato" if notional else "addebito reale")
         self.tiles["dur"].set(Fmt.dur(trace["duration"]),
@@ -2655,8 +2681,8 @@ class TraceWindow(tk.Toplevel):
         tok = trace["tokens"]
         righe = [
             ("Modelli", ", ".join(sorted(trace["per_model"])) or "—"),
-            ("Inizio", cm.h_time(trace["ts"], "%d/%m/%Y %H:%M:%S")),
-            ("Fine", cm.h_time(trace["end"], "%d/%m/%Y %H:%M:%S")),
+            ("Inizio", cam.h_time(trace["ts"], "%d/%m/%Y %H:%M:%S")),
+            ("Fine", cam.h_time(trace["end"], "%d/%m/%Y %H:%M:%S")),
             ("Durata", Fmt.dur(trace["duration"])),
             ("", ""),
             ("Token input", f"{tok['input']:,}".replace(",", ".")),
@@ -2774,11 +2800,11 @@ class PersonWindow(tk.Toplevel):
 
         righe = []
         try:
-            import cm_collector
+            import cam_collector
             for path in team_db_candidates(config):
                 if os.path.isfile(path):
-                    store = cm_collector.Store(path)
-                    righe = cm_collector.projects_of(store, riga["person"])
+                    store = cam_collector.Store(path)
+                    righe = cam_collector.projects_of(store, riga["person"])
                     store.con.close()
                     break
         except Exception as exc:
@@ -2788,7 +2814,7 @@ class PersonWindow(tk.Toplevel):
             self.tbl.set_rows([])
             self.tbl.set_placeholder(
                 "nessun progetto: la telemetria non sa su cosa si lavora, "
-                "serve cm_agent.py su quella macchina")
+                "serve cam_agent.py su quella macchina")
             stato.config(text="i progetti vengono solo dai transcript")
             return
 
@@ -2800,7 +2826,7 @@ class PersonWindow(tk.Toplevel):
             "msgs":     f"{sum(r['user_prompts'] for r in righe)}/"
                         f"{sum(r['assistant_msgs'] for r in righe)}",
         })
-        stato.config(text="i progetti vengono dai transcript spediti da cm_agent")
+        stato.config(text="i progetti vengono dai transcript spediti da cam_agent")
 
 
 class SettingsWindow(tk.Toplevel):
@@ -2879,7 +2905,7 @@ class SettingsWindow(tk.Toplevel):
         tm = self.raw.get("team") or {}
         p = self._page("Team")
         tk.Label(p, text="Consumo di più macchine, dalla telemetria di Claude Code "
-                         "raccolta da cm_collector.py.",
+                         "raccolta da cam_collector.py.",
                  bg=self.t["surface"], fg=self.t["muted"], font=self.t.f_small,
                  anchor="w", justify="left").pack(fill="x", pady=(0, 10))
         self.f_seats = Field(p, self.t, "Postazioni pagate", tm.get("seats", 0), width=8,
@@ -2894,14 +2920,14 @@ class SettingsWindow(tk.Toplevel):
                                 (tm.get("currency") or "EUR").upper())
         self.f_tdb = Field(p, self.t, "Archivio del raccoglitore", tm.get("db") or "",
                            width=34,
-                           hint="Vuoto = cercalo accanto al pannello (cm-team.db).")
+                           hint="Vuoto = cercalo accanto al pannello (cam-team.db).")
 
         # Il livello di riservatezza non si imposta qui: lo decide il raccoglitore
         # quando scrive, perché la telemetria manda l'indirizzo comunque. Qui si
         # può solo mostrare quello in vigore, letto dall'archivio stesso.
         livello = "nessun archivio trovato"
         try:
-            import cm_collector as _cc
+            import cam_collector as _cc
             for _p in team_db_candidates(self.raw):
                 if os.path.isfile(_p):
                     _s = _cc.Store(_p)
@@ -2916,7 +2942,7 @@ class SettingsWindow(tk.Toplevel):
         tk.Label(p, text="Si imposta sul raccoglitore, non qui: la telemetria manda "
                          "l'indirizzo di posta comunque, quindi il livello va imposto "
                          "dove il dato viene scritto.\n"
-                         "    python cm_collector.py --privacy aggregato|pseudonimo|nominativo",
+                         "    python cam_collector.py --privacy aggregato|pseudonimo|nominativo",
                  bg=self.t["surface"], fg=self.t["muted"], font=self.t.f_small,
                  anchor="w", justify="left").pack(fill="x")
 
@@ -2926,7 +2952,7 @@ class SettingsWindow(tk.Toplevel):
         arch = self.app.pricing.get("archivio") or {}
         conteggi = archivio_conteggi()
         tk.Label(p, text=(
-            "I numeri di sessioni e turni finiscono sempre in cm-local.db: servono a "
+            "I numeri di sessioni e turni finiscono sempre in cam-local.db: servono a "
             "rileggerli senza riscansionare, e a non perderli quando Claude Code "
             "cancella i transcript vecchi.\n\n" + stato_archivio(conteggi)),
             bg=self.t["surface"], fg=self.t["ink2"], font=self.t.f_small,
@@ -2940,7 +2966,7 @@ class SettingsWindow(tk.Toplevel):
             "Vuol dire tenere quel testo su disco: è una decisione, per questo è "
             "spento di default. Accendendolo, i transcript vengono riletti una volta. "
             "Per tornare indietro e cancellare quello che è stato archiviato: "
-            "python claude_monitor.py --dimentica-testo — che cancella e compatta "
+            "python cam.py --dimentica-testo — che cancella e compatta "
             "il file. Per vedere quanto pesa e da cosa: --archivio"),
             bg=self.t["surface"], fg=self.t["muted"], font=self.t.f_small,
             anchor="w", justify="left", wraplength=560).pack(fill="x", pady=(8, 0))
@@ -3182,7 +3208,7 @@ class App:
         self.root = root
         self.base = args.base
         self.idle_gap = args.idle_gap
-        self.pricing = config if config is not None else cm.load_config(args.pricing)
+        self.pricing = config if config is not None else cam.load_config(args.pricing)
         self.q: queue.Queue = queue.Queue()
         self.gen = 0
         self.scanning = False
@@ -3217,16 +3243,14 @@ class App:
             self._config_mtime = os.path.getmtime(self.pricing.get("_path") or "")
         except (OSError, TypeError):
             self._config_mtime = None
-        self.state_path = os.path.join(
-            os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
-            "claude-monitor", "gui.json")
+        self.state_path = stato_gui()
 
         mode = args.theme
         if mode == "auto":
             mode = "dark" if windows_prefers_dark() else "light"
         self.t = Theme(mode)
 
-        cm.LOG_HOOK = self._log_hook
+        cam.LOG_HOOK = self._log_hook
 
         root.title(APP_TITLE)
         root.configure(bg=self.t["page"])
@@ -3236,7 +3260,7 @@ class App:
         app_icon(root, self.t)
         self._restore_state()
         self._relabel_costs()
-        mode = (cm.billing_of(self.pricing).get("mode") or "subscription").lower()
+        mode = (cam.billing_of(self.pricing).get("mode") or "subscription").lower()
         for i, (label, spec) in enumerate(BILLING_MODES):
             if spec == mode:
                 self.dd_billing.value = label
@@ -3425,7 +3449,7 @@ class App:
         self.l_status = tk.Label(status, text="pronto", bg=t["page"], fg=t["ink2"],
                                  font=t.f_small, anchor="w")
         self.l_status.pack(side="left")
-        tk.Label(status, text=cm.plan_note(self.pricing), bg=t["page"],
+        tk.Label(status, text=cam.plan_note(self.pricing), bg=t["page"],
                  fg=t["muted"], font=t.f_small, anchor="e").pack(side="right")
 
     def _on_tab(self, index):
@@ -3541,7 +3565,7 @@ class App:
         try:
             def cb(done, total, path, cached):
                 self.q.put(("progress", gen, (done, total)))
-            sessions = cm.collect(self.base, self.pricing, True, self.idle_gap,
+            sessions = cam.collect(self.base, self.pricing, True, self.idle_gap,
                                   None, True, cb)
             self.q.put(("sessions", gen, sessions))
         except BaseException:
@@ -3567,18 +3591,18 @@ class App:
             return
         self._config_mtime = mtime
         try:
-            fresh = cm.load_config(path)
+            fresh = cam.load_config(path)
         except Exception:
             return
         # lo switch scelto a mano nella GUI vince sul file finché la finestra è aperta
-        mode = (cm.billing_of(self.pricing).get("mode") or "subscription")
+        mode = (cam.billing_of(self.pricing).get("mode") or "subscription")
         self.pricing = fresh
         self.pricing.setdefault("billing", {})["mode"] = mode
-        d = cm.defaults_of(fresh)
+        d = cam.defaults_of(fresh)
         self.idle_gap = float(d.get("idle_gap", self.idle_gap))
         Fmt.italian = d.get("locale", "us") == "it"
         global SUB_CURRENCY
-        SUB_CURRENCY = cm.display_currency(self.pricing)
+        SUB_CURRENCY = cam.display_currency(self.pricing)
         self._relabel_costs()
 
     def _log_hook(self, level, msg):
@@ -3601,7 +3625,7 @@ class App:
             self.tiles["live"].set("—", "live disattivato")
 
     def _live_worker(self, gen, stop):
-        live: dict[str, cm.LiveFile] = {}
+        live: dict[str, cam.LiveFile] = {}
         target = None
         status = None
         tick = 0
@@ -3615,19 +3639,19 @@ class App:
                 if not target:
                     self.q.put(("live", gen, None))
                 else:
-                    files = cm.session_files_from_transcript(target)
-                    sess = cm.new_session(cm.session_id_from_path(target))
+                    files = cam.session_files_from_transcript(target)
+                    sess = cam.new_session(cam.session_id_from_path(target))
                     for path in files:
                         lf = live.get(path)
                         if lf is None:
-                            lf = live[path] = cm.LiveFile(path, self.pricing)
+                            lf = live[path] = cam.LiveFile(path, self.pricing)
                         lf.update()
                         try:
                             mtime = os.path.getmtime(path)
                         except OSError:
                             mtime = 0.0
-                        cm.merge_record(sess, lf.snapshot(), mtime)
-                    cm.finalize(sess, self.pricing, self.idle_gap)
+                        cam.merge_record(sess, lf.snapshot(), mtime)
+                    cam.finalize(sess, self.pricing, self.idle_gap)
                     sess["_status"] = status
                     self.q.put(("live", gen, sess))
             except Exception:
@@ -3654,7 +3678,7 @@ class App:
                 self.sessions = payload
                 # la ripartizione della quota va fatta su TUTTE le sessioni del mese,
                 # non solo su quelle filtrate, altrimenti le quote non tornerebbero
-                cm.allocate_real_cost(self.sessions, self.pricing)
+                cam.allocate_real_cost(self.sessions, self.pricing)
                 self.apply_filters()
                 suffix = ""
                 if self.auto_refresh_min > 0:
@@ -3733,7 +3757,7 @@ class App:
             self.tiles["live"].set("—", "nessuna sessione attiva")
             return
         busy = sess.get("_status") == "busy"
-        project = cm.trunc(sess["project"] or "?", 18)
+        project = cam.trunc(sess["project"] or "?", 18)
         self.tiles["live"].set(
             Fmt.cost(sess["cost"]),
             f"{project} · {Fmt.dur(sess['active'])} · {sess['assistant_msgs']} msg",
@@ -3773,14 +3797,14 @@ class App:
         # è una configurazione, non un filtro di vista: deve sopravvivere alla chiusura
         self._write_config("billing", "mode", mode)
         global SUB_CURRENCY
-        SUB_CURRENCY = cm.display_currency(self.pricing)
-        cm.allocate_real_cost(self.sessions, self.pricing)
+        SUB_CURRENCY = cam.display_currency(self.pricing)
+        cam.allocate_real_cost(self.sessions, self.pricing)
         self._relabel_costs()
         self.apply_filters()
 
     def _relabel_costs(self) -> None:
         """A consumo il costo per token È l'addebito; in abbonamento sono due cose."""
-        api = cm.cost_columns(self.pricing)[1] is None
+        api = cam.cost_columns(self.pricing)[1] is None
         for table in (self.projects, self.sessions_tbl):
             table.set_heading("cost", "Speso" if api else "Se fosse API")
         self.months_tbl.set_heading("hyp", "Speso" if api else "Se fosse API")
@@ -3801,7 +3825,7 @@ class App:
         rows = list(self.sessions)
         if self.period_spec:
             try:
-                since = cm.parse_since(self.period_spec)
+                since = cam.parse_since(self.period_spec)
             except SystemExit:
                 since = None
             if since:
@@ -3809,7 +3833,7 @@ class App:
         needle = (self.project_filter or "").strip().lower()
         # Turni trovati cercando nel testo archiviato: se il testo non e'
         # archiviato l'insieme e' vuoto e non cambia niente.
-        self.trace_hits = cm.cerca_nel_testo(needle) if needle else {}
+        self.trace_hits = cam.cerca_nel_testo(needle) if needle else {}
         sessioni_col_testo = {sid for sid, _n in self.trace_hits}
         if needle:
             # La ricerca vale su tutte le schede, ognuna alla sua grana: una
@@ -3880,8 +3904,8 @@ class App:
         duration = sum(r["duration"] for r in rows)
         umsg = sum(r["user_prompts"] for r in rows)
         amsg = sum(r["assistant_msgs"] for r in rows)
-        api = cm.cost_columns(self.pricing)[1] is None
-        rate = cm.fx_usd_per_unit(self.pricing)
+        api = cam.cost_columns(self.pricing)[1] is None
+        rate = cam.fx_usd_per_unit(self.pricing)
         resa = (total / (tot_real * rate)) if (tot_real and rate and not api) else 0
         if api:
             self.tiles["paid"].set(Fmt.cost(total), "a consumo, addebito reale")
@@ -3918,7 +3942,7 @@ class App:
                 # resta acceso su un elenco vuoto e' peggio di nessun chip.
                 self.trace_session = None
                 sessions = self.filtered
-        righe = cm.flatten_traces(sessions, needle,
+        righe = cam.flatten_traces(sessions, needle,
                                   anche=getattr(self, "trace_hits", None))
         for r in righe:
             models = sorted(r["per_model"], key=lambda m: -r["per_model"][m]["cost"])
@@ -3926,7 +3950,7 @@ class App:
                                 else f"{models[0]} +{len(models) - 1}" if models else "—")
         self.trace_rows = righe
 
-        st = cm.stats_of_traces(righe)
+        st = cam.stats_of_traces(righe)
         parti = [f"{len(righe)} turni"]
         if st["median"] is not None:
             parti.append(f"durata mediana {Fmt.dur(st['median'])}")
@@ -3999,7 +4023,7 @@ class App:
         # solito e' molto meno del vero. Meglio dirlo che lasciarlo intuire.
         sole_tel = [r_ for r_ in righe if r_.get("source") == "telemetria"]
         if sole_tel and len(sole_tel) != len(righe):
-            parti.append(f"{len(sole_tel)} senza storico (manca cm_agent)")
+            parti.append(f"{len(sole_tel)} senza storico (manca cam_agent)")
         elif sole_tel:
             parti.append("solo telemetria: manca lo storico precedente")
         # I due casi anomali, ognuno con i suoi nomi: la sottrazione dalle
@@ -4107,7 +4131,7 @@ class App:
         self._cancel_jobs()
         if self.live_stop:
             self.live_stop.set()
-        cm.LOG_HOOK = None
+        cam.LOG_HOOK = None
         self.root.destroy()
 
     def _export_menu(self):
@@ -4147,7 +4171,7 @@ class App:
         try:
             def progress(done, total, project):
                 self.q.put(("export", self.gen, ("progress", done, total, project)))
-            result = cm.export_conversations(sessions, self.base, self.pricing, dove,
+            result = cam.export_conversations(sessions, self.base, self.pricing, dove,
                                              self.idle_gap, False, progress)
             self.q.put(("export", self.gen, ("done", result, dove, None)))
         except BaseException:
@@ -4156,9 +4180,9 @@ class App:
     def export_relazione(self):
         """Il riepilogo di team, quello da allegare a una mail o stampare."""
         try:
-            import cm_collector
+            import cam_collector
         except ImportError:
-            messagebox.showerror(APP_TITLE, "cm_collector.py non trovato "
+            messagebox.showerror(APP_TITLE, "cam_collector.py non trovato "
                                             "accanto al pannello.")
             return
         percorso = next((p for p in team_db_candidates(self.pricing)
@@ -4166,7 +4190,7 @@ class App:
         if not percorso:
             messagebox.showinfo(APP_TITLE,
                                 "Nessun archivio di team: avvia prima il "
-                                "raccoglitore con  python cm_collector.py")
+                                "raccoglitore con  python cam_collector.py")
             return
         dove = filedialog.asksaveasfilename(
             title="Salva il riepilogo del team", defaultextension=".md",
@@ -4175,11 +4199,11 @@ class App:
         if not dove:
             return
         try:
-            store = cm_collector.Store(percorso)
-            testo = cm_collector.relazione_markdown(
+            store = cam_collector.Store(percorso)
+            testo = cam_collector.relazione_markdown(
                 store, self.pricing.get("team") or {},
-                cm.fx_usd_per_unit(self.pricing),
-                cm.parse_since(self.period_spec) if self.period_spec else None)
+                cam.fx_usd_per_unit(self.pricing),
+                cam.parse_since(self.period_spec) if self.period_spec else None)
             store.con.close()
             with open(dove, "w", encoding="utf-8") as fh:
                 fh.write(testo)
@@ -4196,7 +4220,7 @@ class App:
         Traces, filtro compreso: la selezione del dataset e' la ricerca che si e'
         appena fatta, non un secondo insieme di regole da imparare.
         """
-        righe = self.trace_rows or cm.flatten_traces(self.filtered)
+        righe = self.trace_rows or cam.flatten_traces(self.filtered)
         if not righe:
             messagebox.showinfo(APP_TITLE, "Nessun turno da esportare.")
             return
@@ -4207,7 +4231,7 @@ class App:
         if not path:
             return
         try:
-            esito = cm.export_turni_jsonl(righe, path)
+            esito = cam.export_turni_jsonl(righe, path)
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"Esportazione fallita:\n{exc}")
             return
@@ -4221,12 +4245,12 @@ class App:
     def export_json(self):
         path = filedialog.asksaveasfilename(
             parent=self.root, title="Esporta JSON", defaultextension=".json",
-            initialfile="claude-monitor.json",
+            initialfile="cam.json",
             filetypes=[("JSON", "*.json"), ("Tutti i file", "*.*")])
         if not path:
             return
         try:
-            payload = cm.build_json_payload(self.filtered, self.pricing, 0)
+            payload = cam.build_json_payload(self.filtered, self.pricing, 0)
             with open(path, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, indent=2, ensure_ascii=False)
             self.l_status.config(text=f"esportato in {path}")
@@ -4303,7 +4327,7 @@ class App:
         self._cancel_jobs()
         if self.live_stop:
             self.live_stop.set()
-        cm.LOG_HOOK = None
+        cam.LOG_HOOK = None
         self._save_state()
         self.root.destroy()
 
@@ -4315,9 +4339,9 @@ class App:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="claude-monitor-gui",
-        description="Interfaccia grafica di claude-monitor (Tkinter, solo stdlib).")
-    p.add_argument("--base", default=cm.default_base(),
+        prog="cam-gui",
+        description="Interfaccia grafica di CodeAgentMonitor (Tkinter, solo stdlib).")
+    p.add_argument("--base", default=cam.default_base(),
                    help="cartella dei transcript (default: %(default)s)")
     p.add_argument("--config", "--pricing", dest="pricing",
                    help="percorso di config.json (default: accanto allo script)")
@@ -4346,10 +4370,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    config = cm.load_config(args.pricing)
+    config = cam.load_config(args.pricing)
     if args.billing:
         config.setdefault("billing", {})["mode"] = args.billing
-    d = cm.defaults_of(config)
+    d = cam.defaults_of(config)
     if args.locale is None:
         args.locale = d.get("locale", "us")
     if args.theme is None:
@@ -4361,7 +4385,7 @@ def main(argv=None) -> int:
 
     global LIVE_INTERVAL, SUB_CURRENCY
     LIVE_INTERVAL = float(d.get("live_interval", 2.0))
-    SUB_CURRENCY = cm.display_currency(config)
+    SUB_CURRENCY = cam.display_currency(config)
     Fmt.italian = args.locale == "it"
 
     if os.name == "nt":

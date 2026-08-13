@@ -28,7 +28,7 @@ import sqlite3
 import sys
 import tempfile
 
-import cm_statistiche as st
+import cam_statistiche as st
 
 try:  # console Windows: senza questo l'output rediretto muore sugli accenti
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -257,7 +257,7 @@ def prova_adozione_team():
     print("\nPostazioni attive, dall'archivio del raccoglitore")
     verifica("senza archivio: niente, e non e' un errore",
              st.adozione_team(None), [])
-    tmp = tempfile.mkdtemp(prefix="cm-stat-")
+    tmp = tempfile.mkdtemp(prefix="cam-stat-")
     try:
         con = sqlite3.connect(os.path.join(tmp, "t.db"))
         con.execute("CREATE TABLE sessions (machine TEXT, session_id TEXT,"

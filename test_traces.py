@@ -29,7 +29,7 @@ import shutil
 import sys
 import tempfile
 
-import claude_monitor as cm
+import cam
 
 try:  # console Windows: senza questo l'output rediretto muore sugli accenti
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -138,7 +138,7 @@ def scrivi(base: str, righe: list[dict], subagent: str | None = None) -> str:
 
 
 def sessione_di(base: str) -> dict:
-    sessioni = cm.collect(base, PRICING, use_cache=False, idle_gap=300, quiet=True)
+    sessioni = cam.collect(base, PRICING, use_cache=False, idle_gap=300, quiet=True)
     return sessioni[0] if sessioni else {}
 
 
@@ -297,9 +297,9 @@ def prova_cache_e_mediana(base):
     quasi("cache hit del secondo", tr[1]["cache_hit"], 0.0)
     quasi("cache hit della sessione", s["cache_hit"], 1800 / 2100)
     quasi("durata mediana dei turni", s["turn_median"], 20.0)
-    verifica("mediana di una lista vuota", cm.median([]), None)
-    quasi("mediana di due valori", cm.median([10, 20]), 15.0)
-    verifica("niente cache hit senza token", cm.cache_hit(cm.new_tok()), None)
+    verifica("mediana di una lista vuota", cam.median([]), None)
+    quasi("mediana di due valori", cam.median([10, 20]), 15.0)
+    verifica("niente cache hit senza token", cam.cache_hit(cam.new_tok()), None)
 
 
 def prova_span(base):
@@ -312,7 +312,7 @@ def prova_span(base):
         risultato(21, "t2", "errore di scrittura", errore=True),
         risposta(30, "req-3", "finito"),
     ])
-    sess, trace, spans, msgs = cm.load_trace(base, SID, 1, PRICING)
+    sess, trace, spans, msgs = cam.load_trace(base, SID, 1, PRICING)
     verifica("radice + 3 richieste + 2 strumenti", len(spans), 6)
     verifica("la radice e' l'interazione", spans[0]["name"], "interaction")
     quasi("la radice dura quanto il turno", spans[0]["duration"], 30.0)
@@ -345,8 +345,8 @@ def prova_finestra_del_turno(base):
         risposta(55, "req-2", "b"),
         risposta(60, "req-3", "c"),
     ])
-    _, _, spans1, _ = cm.load_trace(base, SID, 1, PRICING)
-    _, _, spans2, _ = cm.load_trace(base, SID, 2, PRICING)
+    _, _, spans1, _ = cam.load_trace(base, SID, 1, PRICING)
+    _, _, spans2, _ = cam.load_trace(base, SID, 2, PRICING)
     verifica("primo turno: radice + una richiesta", len(spans1), 2)
     verifica("secondo turno: radice + due richieste", len(spans2), 3)
 
@@ -362,8 +362,8 @@ def prova_idempotenza(base):
     s = sessione_di(base)
     prima = (s["traces_n"], s["spans_n"], round(s["cost"], 9),
              [t["requests"] for t in s["traces"]])
-    cm.finalize(s, PRICING, 300)
-    cm.finalize(s, PRICING, 300)
+    cam.finalize(s, PRICING, 300)
+    cam.finalize(s, PRICING, 300)
     dopo = (s["traces_n"], s["spans_n"], round(s["cost"], 9),
             [t["requests"] for t in s["traces"]])
     verifica("due finalize di fila danno lo stesso", dopo, prima)
@@ -377,30 +377,30 @@ def prova_ricerca(base):
         prompt(50, "tutt'altro argomento"),
         risposta(55, "req-2", "ok"),
     ])
-    sessioni = cm.collect(base, PRICING, use_cache=False, idle_gap=300, quiet=True)
-    verifica("tutti i turni", len(cm.flatten_traces(sessioni)), 2)
+    sessioni = cam.collect(base, PRICING, use_cache=False, idle_gap=300, quiet=True)
+    verifica("tutti i turni", len(cam.flatten_traces(sessioni)), 2)
     verifica("per parola del prompt",
-             len(cm.flatten_traces(sessioni, "riconcil")), 1)
+             len(cam.flatten_traces(sessioni, "riconcil")), 1)
     verifica("per nome di strumento",
-             len(cm.flatten_traces(sessioni, "powershell")), 1)
-    verifica("per progetto", len(cm.flatten_traces(sessioni, "progetto")), 2)
-    verifica("senza riscontri", len(cm.flatten_traces(sessioni, "zzz")), 0)
+             len(cam.flatten_traces(sessioni, "powershell")), 1)
+    verifica("per progetto", len(cam.flatten_traces(sessioni, "progetto")), 2)
+    verifica("senza riscontri", len(cam.flatten_traces(sessioni, "zzz")), 0)
     verifica("dal piu' recente",
-             [t["prompt"] for t in cm.flatten_traces(sessioni)][0],
+             [t["prompt"] for t in cam.flatten_traces(sessioni)][0],
              "tutt'altro argomento")
 
 
 def prova_clip():
     print("\nArgomenti e risultati accorciati")
     grosso = {"type": "image", "source": {"type": "base64", "data": "A" * 40000}}
-    testo = cm.clip_blob(grosso, 4000)
+    testo = cam.clip_blob(grosso, 4000)
     verifica("il base64 diventa una misura", "KB di dati" in testo, True)
     verifica("e sparisce dal testo", "AAAA" in testo, False)
     verifica("il testo normale passa intero",
-             cm.clip_blob("due parole", 4000), "due parole")
+             cam.clip_blob("due parole", 4000), "due parole")
     verifica("il testo lungo viene tagliato",
-             len(cm.clip_blob("x" * 9000, 4000)) <= 4001, True)
-    verifica("None diventa vuoto", cm.clip_blob(None, 100), "")
+             len(cam.clip_blob("x" * 9000, 4000)) <= 4001, True)
+    verifica("None diventa vuoto", cam.clip_blob(None, 100), "")
 
 
 def prova_contesto_esteso(base):
@@ -424,7 +424,7 @@ def prova_contesto_esteso(base):
 
     # Il rincaro dichiarato non entra nei totali: si affianca.
     caro = dict(PRICING, long_context={"in": 2.0, "out": 1.5})
-    s2 = cm.collect(base, caro, use_cache=False, idle_gap=300, quiet=True)[0]
+    s2 = cam.collect(base, caro, use_cache=False, idle_gap=300, quiet=True)[0]
     verifica("col rapporto dichiarato c'e' un maggiorato",
              s2["contesto_esteso"]["extra"] > 0, True)
     verifica("ed e' dichiarato tale", s2["contesto_esteso"]["dichiarato"], True)
@@ -432,12 +432,12 @@ def prova_contesto_esteso(base):
 
     # Chi non vuole vederlo alza la soglia: nessuna richiesta la supera piu'.
     largo = dict(PRICING, finestra_standard=1_000_000)
-    s3 = cm.collect(base, largo, use_cache=False, idle_gap=300, quiet=True)[0]
+    s3 = cam.collect(base, largo, use_cache=False, idle_gap=300, quiet=True)[0]
     verifica("con una finestra piu' grande non c'e' piu' niente da segnalare",
              s3["contesto_esteso"]["richieste"], 0)
 
     verifica("il contesto e' quello che entra, non quello che esce",
-             cm.contesto_di({"input": 10, "cache_read": 5, "cache_w5m": 1,
+             cam.contesto_di({"input": 10, "cache_read": 5, "cache_w5m": 1,
                              "cache_w1h": 2, "output": 999}), 18)
 
 
@@ -450,7 +450,7 @@ def main() -> int:
              prova_cache_e_mediana, prova_span, prova_finestra_del_turno,
              prova_idempotenza, prova_ricerca, prova_contesto_esteso]
     for prova in prove:
-        tmp = tempfile.mkdtemp(prefix="cm-turni-")
+        tmp = tempfile.mkdtemp(prefix="cam-turni-")
         base = os.path.join(tmp, "projects")
         os.makedirs(base, exist_ok=True)
         try:

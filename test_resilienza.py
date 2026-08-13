@@ -27,9 +27,9 @@ import time
 import types
 from http.server import ThreadingHTTPServer
 
-import claude_monitor as cm
-import cm_agent as ca
-import cm_collector as cc
+import cam
+import cam_agent as ca
+import cam_collector as cc
 
 try:  # console Windows: senza questo l'output rediretto muore sugli accenti
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -81,7 +81,7 @@ def avvia_raccoglitore(store: cc.Store, porta: int = 0) -> ThreadingHTTPServer:
     return httpd
 
 
-cartella = tempfile.mkdtemp(prefix="cm-resil-")
+cartella = tempfile.mkdtemp(prefix="cam-resil-")
 stato_path = os.path.join(cartella, "agent.json")
 store = cc.Store(os.path.join(cartella, "r.db"),
                  cc.make_privacy("pseudonimo", os.path.join(cartella, "k.key")),
@@ -90,9 +90,9 @@ store = cc.Store(os.path.join(cartella, "r.db"),
 # un_giro() chiama il parser vero, che qui non serve: si sostituisce con le
 # sessioni finte, cosi' si prova la logica di invio e non la lettura dei file
 sessioni_correnti = list(SESSIONI)
-cm_originale = cm.collect
-cm.collect = lambda *a, **k: [dict(s) for s in sessioni_correnti]
-cm.allocate_real_cost = lambda *a, **k: None
+cm_originale = cam.collect
+cam.collect = lambda *a, **k: [dict(s) for s in sessioni_correnti]
+cam.allocate_real_cost = lambda *a, **k: None
 
 # Si avvia una volta sola per farsi assegnare una porta dal sistema, poi la si
 # spegne subito: la prima prova ha bisogno che a quell'indirizzo non risponda
@@ -186,7 +186,7 @@ finally:
     if httpd:
         httpd.shutdown()
         httpd.server_close()
-    cm.collect = cm_originale
+    cam.collect = cm_originale
     store.con.close()
     shutil.rmtree(cartella, ignore_errors=True)
 

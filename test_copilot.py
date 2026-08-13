@@ -23,7 +23,7 @@ import shutil
 import sys
 import tempfile
 
-import cm_copilot as cp
+import cam_copilot as cp
 
 try:  # console Windows: senza questo l'output rediretto muore sugli accenti
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -188,36 +188,36 @@ def prova_ordine(tmp):
 def prova_integrazione(tmp):
     """L'unica prova che passa da `collect`, cioe' dal codice vero."""
     print("\nDentro il monitor, accanto a Claude Code")
-    import claude_monitor as cm
-    import cm_archivio as ar
+    import cam
+    import cam_archivio as ar
     scrivi_sessione(tmp, "abc", "s.json",
                     [richiesta("domanda", strumenti=["copilot_readFile"])],
                     cartella="file:///c%3A/lavoro/Progetto")
 
     vero_db, vere_radici = ar.db_path, cp.cartelle_utente
-    ar.db_path = lambda _a=None: os.path.join(tmp, "cm-local.db")
+    ar.db_path = lambda _a=None: os.path.join(tmp, "cam-local.db")
     cp.cartelle_utente = lambda: [tmp]
     try:
         base = os.path.join(tmp, "projects")
         os.makedirs(base, exist_ok=True)
         cfg = {"models": {}, "cache_multipliers": {}, "server_tools": {},
                "aliases": {}, "free_models": []}
-        ss = cm.collect(base, cfg, True, 300, quiet=True)
+        ss = cam.collect(base, cfg, True, 300, quiet=True)
         verifica("la sessione Copilot entra nei conti", len(ss), 1)
-        verifica("con la sua fonte", cm.fonte_di(ss[0]), "copilot")
-        verifica("il costo si scrive col trattino", cm.costo_txt(ss[0]), "—")
-        verifica("e i token pure", cm.tok_txt(ss[0], 0), "—")
+        verifica("con la sua fonte", cam.fonte_di(ss[0]), "copilot")
+        verifica("il costo si scrive col trattino", cam.costo_txt(ss[0]), "—")
+        verifica("e i token pure", cam.tok_txt(ss[0], 0), "—")
         verifica("mentre per Claude Code resta un numero",
-                 cm.costo_txt({"cost": 1.5}), cm.h_cost(1.5))
+                 cam.costo_txt({"cost": 1.5}), cam.h_cost(1.5))
 
         # spenta in configurazione: non deve rientrare come «orfana»
         cfg_off = dict(cfg, copilot={"enabled": False})
         verifica("spenta, sparisce",
-                 len(cm.collect(base, cfg_off, True, 300, quiet=True)), 0)
+                 len(cam.collect(base, cfg_off, True, 300, quiet=True)), 0)
         verifica("ma resta in archivio",
-                 ar.Archivio(ar.db_path(), cm.CACHE_FORMAT).conta()["sessioni"], 1)
+                 ar.Archivio(ar.db_path(), cam.CACHE_FORMAT).conta()["sessioni"], 1)
         verifica("e riaccendendola torna",
-                 len(cm.collect(base, cfg, True, 300, quiet=True)), 1)
+                 len(cam.collect(base, cfg, True, 300, quiet=True)), 1)
     finally:
         ar.db_path, cp.cartelle_utente = vero_db, vere_radici
 
@@ -229,7 +229,7 @@ def main() -> int:
     for prova in (prova_lettura, prova_niente_costo, prova_file_strani,
                   prova_senza_progetto, prova_testo, prova_ordine,
                   prova_integrazione):
-        tmp = tempfile.mkdtemp(prefix="cm-copilot-")
+        tmp = tempfile.mkdtemp(prefix="cam-copilot-")
         try:
             prova(tmp)
         finally:

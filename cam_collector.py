@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-cm-collector — raccoglitore OTLP per la telemetria nativa di Claude Code.
+cam-collector — raccoglitore OTLP per la telemetria nativa di Claude Code.
 
 Claude Code sa gia' esportare da solo 16 metriche (costo, token, tempo attivo,
 sessioni, subagent, strumenti, commit, PR, righe modificate...) via OpenTelemetry.
@@ -9,7 +9,7 @@ Questo modulo ne raccoglie il flusso e lo conserva, senza che sulle macchine
 debba girare niente di scritto da noi.
 
 Riceve OTLP su HTTP in codifica JSON (protocollo "http/json"), quindi non serve
-protobuf e non serve alcuna libreria esterna: solo stdlib, come claude_monitor.py.
+protobuf e non serve alcuna libreria esterna: solo stdlib, come cam.py.
 
     POST /v1/metrics    datapoint delle metriche
     POST /v1/logs       eventi (accettati e scartati se non richiesti)
@@ -22,11 +22,11 @@ cruscotto dice quanto consuma ogni postazione. In lettura si accetta anche
 come "?token=...", perche' un browser non manda intestazioni.
 
 Uso rapido:
-    python cm_collector.py                       # avvia su 127.0.0.1:4318
-    python cm_collector.py --port 4318 --db team.db
-    python cm_collector.py --report              # riepilogo da terminale
-    python cm_collector.py --report --by user    # per persona
-    python cm_collector.py --setup               # stampa la configurazione da applicare
+    python cam_collector.py                       # avvia su 127.0.0.1:4318
+    python cam_collector.py --port 4318 --db team.db
+    python cam_collector.py --report              # riepilogo da terminale
+    python cam_collector.py --report --by user    # per persona
+    python cam_collector.py --setup               # stampa la configurazione da applicare
 
 Livello di dettaglio sulle persone: --privacy {aggregato,pseudonimo,nominativo}.
 La telemetria nativa manda l'indirizzo di posta in chiaro comunque, quindi il
@@ -221,6 +221,32 @@ PRIVACY_LEVELS = ("aggregato", "pseudonimo", "nominativo")
 IDENTITY_ATTRS = ("user.email", "user.id", "user.account_uuid", "user.account_id")
 
 
+def eredita(path: str) -> str:
+    """Raccoglie il file lasciato dal nome precedente del progetto (`cm-*`).
+
+    Il raccoglitore gira da solo su una macchina che non ha il resto del
+    progetto, quindi questa funzione e' scritta due volte — qui e in
+    `cam_archivio` — invece di essere importata: e' il prezzo per tenere questo
+    file senza dipendenze, ed e' il prezzo giusto.
+
+    Vale solo per i nomi predefiniti: un percorso scelto a mano non si tocca.
+    """
+    nome = os.path.basename(path)
+    if not nome.startswith("cam-") or os.path.exists(path):
+        return path
+    vecchio = os.path.join(os.path.dirname(path), "cm-" + nome[4:])
+    if not os.path.exists(vecchio):
+        return path
+    try:
+        os.replace(vecchio, path)
+        for coda in ("-wal", "-shm"):
+            if os.path.exists(vecchio + coda):
+                os.replace(vecchio + coda, path + coda)
+    except OSError:
+        return vecchio
+    return path
+
+
 def load_or_make_key(path: str) -> bytes:
     """Chiave di pseudonimizzazione. Custodita a parte dall'archivio.
 
@@ -228,6 +254,10 @@ def load_or_make_key(path: str) -> bytes:
     puo' ricalcolare i codici a partire da un indirizzo noto. La separazione
     fra i due e' l'intero senso del livello intermedio: va tenuta.
     """
+    # Prima di tutto: se la chiave sta ancora sotto il nome vecchio va raccolta
+    # qui. Piu' sotto, un file che non c'e' ne fa nascere uno nuovo — e una
+    # chiave nuova rende irrecuperabili tutti gli pseudonimi gia' scritti.
+    path = eredita(path)
     if os.path.exists(path):
         with open(path, "rb") as fh:
             return fh.read().strip()
@@ -333,7 +363,7 @@ CREATE TABLE IF NOT EXISTS billing (
     PRIMARY KEY (period, user_key)
 );
 
--- Sessioni ricavate dai transcript e spedite da cm_agent.py. Sono una fonte
+-- Sessioni ricavate dai transcript e spedite da cam_agent.py. Sono una fonte
 -- diversa dai datapoint: coprono anche il passato, perche' i transcript sono
 -- gia' sul disco da mesi, e conoscono l'abbonamento, che la telemetria ignora.
 CREATE TABLE IF NOT EXISTS sessions (
@@ -365,6 +395,7 @@ CREATE INDEX IF NOT EXISTS sessions_ended   ON sessions(ended);
 
 
 def open_db(path: str) -> sqlite3.Connection:
+    path = eredita(path)
     con = sqlite3.connect(path, check_same_thread=False, timeout=10)
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
@@ -615,10 +646,10 @@ def team_rows(store: Store, since: float | None = None) -> list[dict]:
     """Una riga per postazione, gia' nella forma che il pannello si aspetta.
 
     Vive qui e non nella GUI perche' sia verificabile da riga di comando:
-        python cm_collector.py --report --by user
+        python cam_collector.py --report --by user
 
     ATTENZIONE, due trappole quando si unira' questa fonte a quella delle
-    sessioni spedite da cm_agent.py:
+    sessioni spedite da cam_agent.py:
 
     1. Le due fonti si SOVRAPPONGONO. Una sessione fatta dopo l'accensione
        della telemetria compare in entrambe: sommare i due costi la conta due
@@ -711,7 +742,7 @@ def team_rows(store: Store, since: float | None = None) -> list[dict]:
 
 
 def righe_da_sessioni(store: Store, since: float | None = None) -> dict[str, dict]:
-    """Una riga per postazione ricavata dalle sessioni spedite da cm_agent.
+    """Una riga per postazione ricavata dalle sessioni spedite da cam_agent.
 
     E' la fonte da preferire per costo, token e tempo: copre anche i mesi
     precedenti all'accensione della telemetria, che altrimenti sparirebbero.
@@ -1166,7 +1197,7 @@ def read_body(handler: BaseHTTPRequestHandler) -> bytes:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = f"cm-collector/{__version__}"
+    server_version = f"cam-collector/{__version__}"
     store: Store = None       # iniettati da serve()
     verbose: bool = False
     token: str | None = None
@@ -1238,7 +1269,7 @@ class Handler(BaseHTTPRequestHandler):
                     macchina, payload.get("sessions") or [],
                     payload.get("user"), payload.get("attrs"))
             except Exception as exc:
-                sys.stderr.write(f"[cm-collector] sessioni non scritte: {exc}\n")
+                sys.stderr.write(f"[cam-collector] sessioni non scritte: {exc}\n")
                 self._json(400, {"error": str(exc)})
                 return
             if self.verbose:
@@ -1258,7 +1289,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 # Mai rispondere 5xx per un errore nostro di parsing: l'esportatore
                 # ritenterebbe all'infinito lo stesso payload.
-                sys.stderr.write(f"[cm-collector] errore in scrittura: {exc}\n")
+                sys.stderr.write(f"[cam-collector] errore in scrittura: {exc}\n")
                 self._json(200, {"partialSuccess": {}})
                 return
             if self.verbose:
@@ -1376,7 +1407,7 @@ def dashboard_html(store: Store) -> str:
             '<div class="empty"><p><b>Nessun dato ancora.</b></p>'
             "<p>Il raccoglitore &egrave; attivo e in ascolto, ma Claude Code non ha "
             "ancora esportato niente. Verifica che la telemetria sia configurata "
-            "(<code>python cm_collector.py --setup</code>) e ricorda che va "
+            "(<code>python cam_collector.py --setup</code>) e ricorda che va "
             "<b>riavviata la sessione</b> di Claude Code perch&eacute; le variabili "
             "d&rsquo;ambiente vengano lette.</p>"
             "<p>Il primo invio arriva entro l&rsquo;intervallo di esportazione "
@@ -1417,7 +1448,7 @@ def dashboard_html(store: Store) -> str:
     return f"""<!doctype html>
 <html lang="it"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>cm-collector</title><style>{CSS}</style>
+<title>cam-collector</title><style>{CSS}</style>
 <meta http-equiv="refresh" content="30"></head>
 <body><div class="wrap">
 <h1>Telemetria Claude Code</h1>
@@ -1705,7 +1736,7 @@ def print_status(store: Store, endpoint: str, token: str | None = None) -> int:
     return 0
 
 
-def dimentica(store: Store, chi: str, keyfile: str = "cm-pseudonimi.key") -> dict:
+def dimentica(store: Store, chi: str, keyfile: str = "cam-pseudonimi.key") -> dict:
     """Cancella dall'archivio tutto quello che riguarda una persona.
 
     Accetta l'indirizzo di posta oppure il codice gia' pseudonimizzato. La
@@ -1769,7 +1800,7 @@ def print_service(host: str, port: int, db: str, privacy: str) -> None:
         print()
         print("  $s = (New-Object -ComObject WScript.Shell).CreateShortcut(")
         print("      (Join-Path ([Environment]::GetFolderPath('Startup')) "
-              "'cm-collector.lnk'))")
+              "'cam-collector.lnk'))")
         print(f"  $s.TargetPath       = '{pyw}'")
         print(f"  $s.Arguments        = '{args}'")
         print(f"  $s.WorkingDirectory = '{qui}'")
@@ -1783,13 +1814,13 @@ def print_service(host: str, port: int, db: str, privacy: str) -> None:
         print(f"  $a = New-ScheduledTaskAction -Execute '{pyw}' `")
         print(f"      -Argument '{args}' -WorkingDirectory '{qui}'")
         print("  $t = New-ScheduledTaskTrigger -AtLogOn")
-        print("  Register-ScheduledTask -TaskName 'cm-collector' -Action $a "
+        print("  Register-ScheduledTask -TaskName 'cam-collector' -Action $a "
               "-Trigger $t -Force")
         print()
         print("  per rimuoverla:  Unregister-ScheduledTask -TaskName "
-              "'cm-collector' -Confirm:$false")
+              "'cam-collector' -Confirm:$false")
     else:
-        print("Linux — unita' utente systemd in ~/.config/systemd/user/cm-collector.service:")
+        print("Linux — unita' utente systemd in ~/.config/systemd/user/cam-collector.service:")
         print()
         print("  [Unit]")
         print("  Description=Raccoglitore telemetria Claude Code")
@@ -1799,7 +1830,7 @@ def print_service(host: str, port: int, db: str, privacy: str) -> None:
         print("  [Install]")
         print("  WantedBy=default.target")
         print()
-        print("  systemctl --user enable --now cm-collector")
+        print("  systemctl --user enable --now cam-collector")
     print()
     print("Per il team il raccoglitore sta su una macchina sola, in sede, e le")
     print("postazioni gli mandano i dati: li' va installato come servizio di")
@@ -1818,7 +1849,7 @@ def print_setup(endpoint: str, token: str | None = None) -> None:
         print("ATTENZIONE: 0.0.0.0 e' l'indirizzo di ascolto, non uno a cui")
         print("collegarsi. Rilancia con il nome o l'IP con cui le postazioni")
         print("raggiungono questa macchina, per esempio:")
-        print("  python cm_collector.py --setup --host srv-claude.azienda.it")
+        print("  python cam_collector.py --setup --host srv-claude.azienda.it")
         print()
     print("In ~/.claude/settings.json, blocco \"env\":")
     print()
@@ -1884,7 +1915,7 @@ def print_report(store: Store, by: str, since: float | None) -> None:
         print()
         print("Se il raccoglitore e' appena partito e' normale: Claude Code")
         print("esporta a intervalli, e va riavviato dopo aver messo le variabili.")
-        print("Verifica la configurazione con:  python cm_collector.py --setup")
+        print("Verifica la configurazione con:  python cam_collector.py --setup")
         return
 
     etichetta = {"all": "Totale", "user": "Postazione", "model": "Modello",
@@ -1917,7 +1948,7 @@ def print_report(store: Store, by: str, since: float | None) -> None:
             print("dalla telemetria solo cio' che i transcript non hanno. Le "
                   "due fonti non si sommano.")
         else:
-            print("Solo telemetria: senza cm_agent.py manca tutto quello che "
+            print("Solo telemetria: senza cam_agent.py manca tutto quello che "
                   "precede l'accensione.")
     else:
         print(f"Asse '{by}': dalla sola telemetria.")
@@ -1940,7 +1971,7 @@ def serve(store: Store, host: str, port: int, verbose: bool,
         "pseudonimo": "codice a chiave: l'indirizzo di posta non entra in archivio",
         "nominativo": "ATTENZIONE: indirizzi di posta conservati in chiaro",
     }[store.level]
-    print(f"cm-collector {__version__} in ascolto su http://{host}:{port}")
+    print(f"cam-collector {__version__} in ascolto su http://{host}:{port}")
     print(f"  archivio     {os.path.abspath(store.path)}")
     print(f"  riservatezza {store.level} — {nota}")
     coda = f"?token={token}" if token else ""
@@ -1981,7 +2012,7 @@ def main(argv=None) -> int:
                     help="indirizzo di ascolto (default: solo locale)")
     ap.add_argument("--port", type=int, default=4318,
                     help="porta di ascolto (default: 4318, standard OTLP/HTTP)")
-    ap.add_argument("--db", default="cm-team.db",
+    ap.add_argument("--db", default="cam-team.db",
                     help="percorso dell'archivio SQLite")
     ap.add_argument("--report", action="store_true",
                     help="stampa il riepilogo ed esce")
@@ -2009,11 +2040,11 @@ def main(argv=None) -> int:
                          "o per codice")
     ap.add_argument("--privacy", default="pseudonimo", choices=PRIVACY_LEVELS,
                     help="livello di dettaglio sulle persone (default: pseudonimo)")
-    ap.add_argument("--key", default="cm-pseudonimi.key",
+    ap.add_argument("--key", default="cam-pseudonimi.key",
                     help="file con la chiave di pseudonimizzazione, da custodire a parte")
-    ap.add_argument("--token", default=os.environ.get("CM_TOKEN"),
+    ap.add_argument("--token", default=os.environ.get("CAM_TOKEN") or os.environ.get("CM_TOKEN"),
                     help="token condiviso richiesto agli invii "
-                         "(o variabile CM_TOKEN). Obbligatorio se apri alla rete.")
+                         "(o variabile CAM_TOKEN). Obbligatorio se apri alla rete.")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="registra ogni invio ricevuto")
     args = ap.parse_args(argv)

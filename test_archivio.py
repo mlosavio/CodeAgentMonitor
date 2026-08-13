@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Prove sull'archivio locale (`cm-local.db`).
+Prove sull'archivio locale (`cam-local.db`).
 
 Il punto delicato non e' salvare: e' **cosa sopravvive a cosa**. L'archivio ha
 due meta' con regole opposte, e le prove qui sotto guardano quasi solo il
@@ -29,8 +29,8 @@ import sys
 import tempfile
 import time
 
-import claude_monitor as cm
-import cm_archivio as ar
+import cam
+import cam_archivio as ar
 
 try:  # console Windows: senza questo l'output rediretto muore sugli accenti
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -104,14 +104,14 @@ def scrivi(base, righe, subagent=None) -> str:
     return path
 
 
-def apri(tmp, formato=cm.CACHE_FORMAT, testo=False,
+def apri(tmp, formato=cam.CACHE_FORMAT, testo=False,
          sola_lettura=False) -> ar.Archivio:
-    return ar.Archivio(os.path.join(tmp, "cm-local.db"), formato, testo=testo,
+    return ar.Archivio(os.path.join(tmp, "cam-local.db"), formato, testo=testo,
                        sola_lettura=sola_lettura)
 
 
 def conta(tmp, tabella) -> int:
-    con = sqlite3.connect(os.path.join(tmp, "cm-local.db"))
+    con = sqlite3.connect(os.path.join(tmp, "cam-local.db"))
     try:
         return con.execute(f"SELECT COUNT(*) FROM {tabella}").fetchone()[0]
     finally:
@@ -127,7 +127,7 @@ def prova_cache(tmp, base):
     print("\nCache di analisi: si riusa solo se il file non e' cambiato")
     path = scrivi(base, [prompt(0, "uno"), risposta(5, "req-1")])
     st = os.stat(path)
-    rec = cm.scan_file(path, PRICING)
+    rec = cam.scan_file(path, PRICING)
     with apri(tmp) as a:
         a.scrivi_file(path, st.st_size, st.st_mtime, rec)
     with apri(tmp) as a:
@@ -144,24 +144,24 @@ def prova_cache(tmp, base):
 def prova_formato(tmp, base):
     print("\nCambia il formato del parser: si svuota la cache, non l'archivio")
     path = scrivi(base, [prompt(0, "uno"), risposta(5, "req-1")])
-    sessioni = cm.collect(base, PRICING, True, 300, quiet=True)
+    sessioni = cam.collect(base, PRICING, True, 300, quiet=True)
     # collect ha usato l'archivio accanto allo script: qui ne uso uno mio
     with apri(tmp) as a:
         st = os.stat(path)
         a.scrivi_file(path, st.st_size, st.st_mtime,
-                      cm.scan_file(path, PRICING))
+                      cam.scan_file(path, PRICING))
         a.scrivi_sessioni(sessioni)
     verifica("prima: cache piena", conta(tmp, "file"), 1)
     verifica("prima: archivio pieno", conta(tmp, "sessione"), 1)
     turni_prima = conta(tmp, "turno")
 
-    with apri(tmp, formato=cm.CACHE_FORMAT + 1) as a:
+    with apri(tmp, formato=cam.CACHE_FORMAT + 1) as a:
         verifica("l'archivio segnala di aver svuotato", a.svuotata, True)
     verifica("dopo: cache svuotata", conta(tmp, "file"), 0)
     verifica("dopo: sessioni intatte", conta(tmp, "sessione"), 1)
     verifica("dopo: turni intatti", conta(tmp, "turno"), turni_prima)
 
-    with apri(tmp, formato=cm.CACHE_FORMAT + 1) as a:
+    with apri(tmp, formato=cam.CACHE_FORMAT + 1) as a:
         verifica("il secondo giro non risvuota niente", a.svuotata, False)
 
 
@@ -170,19 +170,19 @@ def prova_potatura(tmp, base):
     scrivi(base, [prompt(0, "uno"), risposta(5, "req-1")])
     sub = scrivi(base, [prompt(2, "task", sidechain=True), risposta(3, "req-s")],
                  subagent="uno")
-    sessioni = cm.collect(base, PRICING, True, 300, quiet=True)
+    sessioni = cam.collect(base, PRICING, True, 300, quiet=True)
     verifica("la sessione ha due file", len(sessioni[0]["files"]), 2)
 
     vivi = set()
     with apri(tmp) as a:
         for p in sessioni[0]["files"]:
             st = os.stat(p)
-            a.scrivi_file(p, st.st_size, st.st_mtime, cm.scan_file(p, PRICING))
+            a.scrivi_file(p, st.st_size, st.st_mtime, cam.scan_file(p, PRICING))
             vivi.add(ar.chiave(p))
         a.scrivi_sessioni(sessioni)
         a.pota(base, vivi)
 
-    con = sqlite3.connect(os.path.join(tmp, "cm-local.db"))
+    con = sqlite3.connect(os.path.join(tmp, "cam-local.db"))
     riga = con.execute("SELECT origine, file_totali, file_mancanti "
                        "FROM sessione").fetchone()
     verifica("finche' i file ci sono e' derivata", riga, ("derivato", 2, 0))
@@ -193,7 +193,7 @@ def prova_potatura(tmp, base):
     with apri(tmp) as a:
         tolti = a.pota(base, vivi - {ar.chiave(sub)})
         verifica("una riga di cache tolta", tolti, 1)
-    con = sqlite3.connect(os.path.join(tmp, "cm-local.db"))
+    con = sqlite3.connect(os.path.join(tmp, "cam-local.db"))
     riga = con.execute("SELECT origine, file_totali, file_mancanti "
                        "FROM sessione").fetchone()
     verifica("adesso e' acquisita", riga, ("acquisito", 2, 1))
@@ -211,7 +211,7 @@ def prova_potatura_altra_base(tmp, base):
     with apri(tmp) as a:
         for p in (path, altrove):
             st = os.stat(p)
-            a.scrivi_file(p, st.st_size, st.st_mtime, cm.scan_file(p, PRICING))
+            a.scrivi_file(p, st.st_size, st.st_mtime, cam.scan_file(p, PRICING))
     # il conteggio va fatto a connessione chiusa: finche' la scansione e' in
     # corso le scritture stanno in una transazione, e da fuori non si vedono —
     # che e' esattamente il comportamento voluto
@@ -245,36 +245,36 @@ def prova_import_json(tmp, base):
     print("\nTrasloco dalla vecchia cache JSON")
     path = scrivi(base, [prompt(0, "uno"), risposta(5, "req-1")])
     st = os.stat(path)
-    rec = cm.scan_file(path, PRICING)
+    rec = cam.scan_file(path, PRICING)
     vecchia = os.path.join(tmp, ".cache.json")
 
     with open(vecchia, "w", encoding="utf-8") as fh:
-        json.dump({"format": cm.CACHE_FORMAT,
+        json.dump({"format": cam.CACHE_FORMAT,
                    "files": {path: {"size": st.st_size, "mtime": st.st_mtime,
                                     "rec": rec}}}, fh)
     with apri(tmp) as a:
         verifica("importa col formato giusto",
-                 ar.importa_cache_json(a, vecchia, cm.CACHE_FORMAT), 1)
+                 ar.importa_cache_json(a, vecchia, cam.CACHE_FORMAT), 1)
         verifica("e il record si rilegge", a.record(path)["session_id"], SID)
 
     with open(vecchia, "w", encoding="utf-8") as fh:
-        json.dump({"format": cm.CACHE_FORMAT - 1, "files": {path: {}}}, fh)
+        json.dump({"format": cam.CACHE_FORMAT - 1, "files": {path: {}}}, fh)
     with apri(tmp) as a:
         verifica("col formato sbagliato non importa niente",
-                 ar.importa_cache_json(a, vecchia, cm.CACHE_FORMAT), 0)
+                 ar.importa_cache_json(a, vecchia, cam.CACHE_FORMAT), 0)
     verifica("un file illeggibile non fa saltare niente",
              ar.importa_cache_json(apri(tmp), os.path.join(tmp, "manca"),
-                                   cm.CACHE_FORMAT), 0)
+                                   cam.CACHE_FORMAT), 0)
 
 
 def prova_svuota(tmp, base):
     print("\n--clear-cache svuota l'analisi e lascia l'archivio")
     scrivi(base, [prompt(0, "uno"), risposta(5, "req-1")])
-    sessioni = cm.collect(base, PRICING, True, 300, quiet=True)
+    sessioni = cam.collect(base, PRICING, True, 300, quiet=True)
     with apri(tmp) as a:
         for p in sessioni[0]["files"]:
             st = os.stat(p)
-            a.scrivi_file(p, st.st_size, st.st_mtime, cm.scan_file(p, PRICING))
+            a.scrivi_file(p, st.st_size, st.st_mtime, cam.scan_file(p, PRICING))
         a.scrivi_sessioni(sessioni)
         prima = a.conta()
         verifica("prima c'e' tutto", (prima["file"], prima["sessioni"]), (1, 1))
@@ -297,10 +297,10 @@ def prova_collect(tmp, base):
         if path:
             letti.append(da_cache)
 
-    uno = cm.collect(base, PRICING, True, 300, quiet=True, on_progress=spia)
+    uno = cam.collect(base, PRICING, True, 300, quiet=True, on_progress=spia)
     verifica("primo giro: letto dal disco", any(letti), False)
     letti.clear()
-    due = cm.collect(base, PRICING, True, 300, quiet=True, on_progress=spia)
+    due = cam.collect(base, PRICING, True, 300, quiet=True, on_progress=spia)
     verifica("secondo giro: preso dall'archivio", all(letti), True)
     verifica("stessi turni", (uno[0]["traces_n"], due[0]["traces_n"]), (2, 2))
     verifica("stesso costo", round(uno[0]["cost"], 9), round(due[0]["cost"], 9))
@@ -310,12 +310,12 @@ def prova_collect(tmp, base):
                   prompt(60, "due"), risposta(65, "req-2", out=300),
                   prompt(120, "tre"), risposta(125, "req-3", out=400)])
     letti.clear()
-    tre = cm.collect(base, PRICING, True, 300, quiet=True, on_progress=spia)
+    tre = cam.collect(base, PRICING, True, 300, quiet=True, on_progress=spia)
     verifica("file cambiato: riletto", any(letti), False)
     verifica("e il turno nuovo si vede", tre[0]["traces_n"], 3)
 
     letti.clear()
-    cm.collect(base, PRICING, False, 300, quiet=True, on_progress=spia)
+    cam.collect(base, PRICING, False, 300, quiet=True, on_progress=spia)
     verifica("con --no-cache si rilegge sempre", any(letti), False)
 
 
@@ -330,11 +330,11 @@ def prova_testo(tmp, base):
     scrivi(base, [prompt(0, "prima domanda"), risposta(5, "req-1", testo="prima risposta"),
                   prompt(60, "seconda domanda"), risposta(65, "req-2", testo="seconda risposta")])
 
-    cm.collect(base, PRICING, True, 300, quiet=True)
+    cam.collect(base, PRICING, True, 300, quiet=True)
     with apri(tmp) as a:
         verifica("spento: niente testo", a.conta()["messaggi"], 0)
 
-    sessioni = cm.collect(base, con_testo(), True, 300, quiet=True)
+    sessioni = cam.collect(base, con_testo(), True, 300, quiet=True)
     with apri(tmp, testo=True) as a:
         c = a.conta()
         verifica("acceso: il testo c'e'", c["messaggi"], 4)
@@ -360,7 +360,7 @@ def prova_ricerca_testo(tmp, base):
         prompt(60, "altra domanda"),
         risposta(65, "req-2", testo="qui non c'entra niente"),
     ])
-    cm.collect(base, con_testo(), True, 300, quiet=True)
+    cam.collect(base, con_testo(), True, 300, quiet=True)
     with apri(tmp, testo=True) as a:
         verifica("FTS5 disponibile", a.fts, True)
         r = a.cerca("riconciliazione")
@@ -373,7 +373,7 @@ def prova_ricerca_testo(tmp, base):
                  isinstance(a.cerca('fattura - "x" *'), list), True)
         verifica("stringa vuota", a.cerca("   "), [])
 
-    trovati = cm.cerca_nel_testo("riconciliazione")
+    trovati = cam.cerca_nel_testo("riconciliazione")
     verifica("e la ricerca arriva fino ai turni", len(trovati), 1)
     # PF05: il frammento arriva fino alla riga della tabella. Senza, la ricerca
     # dice quanti turni contengono la parola e non dove.
@@ -382,27 +382,27 @@ def prova_ricerca_testo(tmp, base):
              "riconciliazione" in trovati[chiave]["frammento"].lower(), True)
     verifica("evidenziata", "«" in trovati[chiave]["frammento"], True)
     verifica("e chi l'ha detta", trovati[chiave]["ruolo"], "claude")
-    verifica("sotto le tre lettere non si cerca", cm.cerca_nel_testo("ri"), {})
+    verifica("sotto le tre lettere non si cerca", cam.cerca_nel_testo("ri"), {})
 
-    sessioni = cm.collect(base, con_testo(), True, 300, quiet=True)
-    righe = cm.flatten_traces(sessioni, "riconciliazione", anche=trovati)
+    sessioni = cam.collect(base, con_testo(), True, 300, quiet=True)
+    righe = cam.flatten_traces(sessioni, "riconciliazione", anche=trovati)
     verifica("un turno solo passa il filtro", len(righe), 1)
     verifica("con il frammento addosso",
              "riconciliazione" in (righe[0]["frammento"] or "").lower(), True)
     # Anche le domande sono testo archiviato: se la parola sta li', il frammento
     # dice «tu». La colonna mostra il prompt tagliato, il frammento mostra il
     # punto — non e' un doppione, e' il pezzo che il taglio nasconderebbe.
-    altri = cm.flatten_traces(sessioni, "altra", anche=cm.cerca_nel_testo("altra"))
+    altri = cam.flatten_traces(sessioni, "altra", anche=cam.cerca_nel_testo("altra"))
     verifica("una parola nella domanda e' attribuita a te",
              [r["frammento_ruolo"] for r in altri], ["tu"])
     verifica("senza ricerca nessuna riga ha frammenti",
-             {r["frammento"] for r in cm.flatten_traces(sessioni)}, {None})
+             {r["frammento"] for r in cam.flatten_traces(sessioni)}, {None})
     verifica("un insieme al posto della mappa non fa saltare niente",
-             len(cm.flatten_traces(sessioni, "riconciliazione", anche={chiave})), 1)
+             len(cam.flatten_traces(sessioni, "riconciliazione", anche={chiave})), 1)
 
     # PF06: il dataset esce dalla stessa selezione che si ha davanti.
     fuori = os.path.join(tmp, "turni.jsonl")
-    esito = cm.export_turni_jsonl(righe, fuori)
+    esito = cam.export_turni_jsonl(righe, fuori)
     verifica("un turno esportato", esito["turni"], 1)
     verifica("con la risposta presa dall'archivio", esito["senza_risposta"], 0)
     riga = json.loads(open(fuori, encoding="utf-8").read().strip())
@@ -423,7 +423,7 @@ def prova_manutenzione(tmp, base):
     scrivi(base, [prompt(i * 60, f"domanda numero {i} " + "x" * 400)
                   for i in range(30)]
            + [risposta(1900, "req-1", testo="una risposta " + "y" * 4000)])
-    cm.collect(base, con_testo(), True, 300, quiet=True)
+    cam.collect(base, con_testo(), True, 300, quiet=True)
     with apri(tmp, testo=True) as a:
         p = a.peso()
         verifica("il file ha un peso", p["file"] > 0, True)
@@ -436,7 +436,7 @@ def prova_manutenzione(tmp, base):
                  p["timestamp"] > 0, True)
     # ...e la risposta e' stata comprimere, non buttare via: i timestamp ci sono
     # ancora tutti, ma su disco occupano molto meno.
-    con = sqlite3.connect(os.path.join(tmp, "cm-local.db"))
+    con = sqlite3.connect(os.path.join(tmp, "cam-local.db"))
     grezzo, in_chiaro = con.execute(
         "SELECT rec, LENGTH(rec) FROM file LIMIT 1").fetchone()
     con.close()
@@ -450,7 +450,7 @@ def prova_manutenzione(tmp, base):
         verifica("e si rilegge per intero", isinstance(rec.get("ts"), list), True)
         verifica("con tutti i suoi istanti", len(rec["ts"]) > 1, True)
     # Le righe scritte prima, in chiaro, non devono far rileggere niente.
-    con = sqlite3.connect(os.path.join(tmp, "cm-local.db"))
+    con = sqlite3.connect(os.path.join(tmp, "cam-local.db"))
     path_vecchio = con.execute("SELECT path FROM file LIMIT 1").fetchone()[0]
     con.execute("UPDATE file SET rec=? WHERE path=?",
                 (json.dumps({"session_id": "vecchia", "ts": [1.0, 2.0]}),
@@ -477,6 +477,43 @@ def prova_manutenzione(tmp, base):
         verifica("ma il peso si legge lo stesso", a.peso()["file"] > 0, True)
 
 
+def prova_trasloco_del_nome(tmp, base):
+    """Il progetto si chiamava claude-monitor: i suoi file devono seguirlo.
+
+    E' la prova che vale piu' di tutte in un rename: un archivio che non viene
+    raccolto non da' errore, riparte vuoto — e per le sessioni il cui transcript
+    non c'e' piu' era l'unica copia rimasta.
+    """
+    print("\nI file lasciati dal nome precedente vengono raccolti")
+    scrivi(base, [prompt(0, "una domanda"), risposta(5, "req-1", out=300)])
+    cam.collect(base, PRICING, True, 300, quiet=True)
+
+    nuovo = os.path.join(tmp, "cam-local.db")
+    vecchio = os.path.join(tmp, "cm-local.db")
+    with apri(tmp) as a:
+        prima = a.conta()
+    os.replace(nuovo, vecchio)          # com'era prima del cambio di nome
+    for coda in ("-wal", "-shm"):
+        if os.path.exists(nuovo + coda):
+            os.replace(nuovo + coda, vecchio + coda)
+    verifica("si parte col solo nome vecchio", os.path.exists(nuovo), False)
+
+    verifica("il trasloco restituisce il nome nuovo",
+             ar.eredita(nuovo, vecchio), nuovo)
+    verifica("e il vecchio non c'e' piu': si sposta, non si copia",
+             os.path.exists(vecchio), False)
+    with apri(tmp) as a:
+        verifica("i dati sono tutti li'", a.conta(), prima)
+
+    # Le due condizioni in cui non si deve toccare niente.
+    altro = os.path.join(tmp, "altro.db")
+    verifica("se il nuovo esiste gia', il vecchio si lascia stare",
+             ar.eredita(nuovo, altro), nuovo)
+    verifica("e se il vecchio non c'e', non succede niente",
+             ar.eredita(altro, os.path.join(tmp, "mai-esistito.db")), altro)
+    verifica("senza aver creato niente", os.path.exists(altro), False)
+
+
 def prova_sessione_sopravvissuta(tmp, base):
     print("\nIl transcript sparisce: la sessione resta nei conti")
     path = scrivi(base, [
@@ -485,13 +522,13 @@ def prova_sessione_sopravvissuta(tmp, base):
         prompt(60, "e una seconda"),
         risposta(65, "req-2", out=200, testo="e la sua risposta"),
     ])
-    prima = cm.collect(base, con_testo(), True, 300, quiet=True)
+    prima = cam.collect(base, con_testo(), True, 300, quiet=True)
     costo = prima[0]["cost"]
     verifica("prima la sessione c'e'", len(prima), 1)
     verifica("e non e' archiviata", prima[0].get("archiviata"), None)
 
     os.remove(path)
-    dopo = cm.collect(base, con_testo(), True, 300, quiet=True)
+    dopo = cam.collect(base, con_testo(), True, 300, quiet=True)
     verifica("dopo la sessione c'e' ancora", len(dopo), 1)
     verifica("marcata archiviata", dopo[0]["archiviata"], True)
     verifica("con lo stesso costo", round(dopo[0]["cost"], 9), round(costo, 9))
@@ -505,13 +542,13 @@ def prova_sessione_sopravvissuta(tmp, base):
              round(sum(d["cost"] for mm in dopo[0]["per_month"].values()
                        for d in mm.values()), 9), round(costo, 9))
 
-    sess, msgs = cm.conversazione_archiviata(SID)
+    sess, msgs = cam.conversazione_archiviata(SID)
     verifica("e la conversazione si rilegge", len(msgs), 4)
     verifica("con il testo giusto", msgs[1]["text"], "una risposta memorabile")
     verifica("i token dei messaggi sono azzerati, non assenti",
              msgs[1]["tok"]["output"], 0)
 
-    _, trace, spans, turno_msgs = cm.load_trace(base, SID, 2, PRICING)
+    _, trace, spans, turno_msgs = cam.load_trace(base, SID, 2, PRICING)
     verifica("il turno si apre lo stesso", trace.get("n"), 2)
     verifica("ma senza span", spans, [])
     verifica("con i messaggi di quel turno", len(turno_msgs), 2)
@@ -522,17 +559,17 @@ def prova_sessione_dimezzata(tmp, base):
     scrivi(base, [prompt(0, "uno"), risposta(5, "req-1", out=100)])
     sub = scrivi(base, [prompt(2, "task", sidechain=True),
                         risposta(3, "req-s", out=900)], subagent="uno")
-    prima = cm.collect(base, PRICING, True, 300, quiet=True)
+    prima = cam.collect(base, PRICING, True, 300, quiet=True)
     costo_pieno = prima[0]["cost"]
 
     os.remove(sub)
-    dopo = cm.collect(base, PRICING, True, 300, quiet=True)
+    dopo = cam.collect(base, PRICING, True, 300, quiet=True)
     verifica("resta una sessione sola", len(dopo), 1)
     verifica("non e' archiviata: un file ce l'ha ancora",
              dopo[0].get("archiviata"), None)
     verifica("il costo cala, perche' quel lavoro non si legge piu'",
              dopo[0]["cost"] < costo_pieno, True)
-    con = sqlite3.connect(os.path.join(tmp, "cm-local.db"))
+    con = sqlite3.connect(os.path.join(tmp, "cam-local.db"))
     riga = con.execute("SELECT origine, file_totali, file_mancanti "
                        "FROM sessione").fetchone()
     con.close()
@@ -542,13 +579,13 @@ def prova_sessione_dimezzata(tmp, base):
 def prova_filtro_progetto(tmp, base):
     print("\nIl filtro --project vale anche per le sessioni senza piu' file")
     path = scrivi(base, [prompt(0, "uno"), risposta(5, "req-1")])
-    cm.collect(base, PRICING, True, 300, quiet=True)
+    cam.collect(base, PRICING, True, 300, quiet=True)
     os.remove(path)
     verifica("col progetto giusto si vede",
-             len(cm.collect(base, PRICING, True, 300, project="progetto", quiet=True)), 1)
+             len(cam.collect(base, PRICING, True, 300, project="progetto", quiet=True)), 1)
     verifica("con un altro no",
-             len(cm.collect(base, PRICING, True, 300, project="altro", quiet=True)), 0)
-    verifica("senza filtro si vede", len(cm.collect(base, PRICING, True, 300, quiet=True)), 1)
+             len(cam.collect(base, PRICING, True, 300, project="altro", quiet=True)), 0)
+    verifica("senza filtro si vede", len(cam.collect(base, PRICING, True, 300, quiet=True)), 1)
 
 
 def main() -> int:
@@ -559,16 +596,17 @@ def main() -> int:
              prova_potatura_altra_base, prova_turni_riscritti,
              prova_import_json, prova_svuota, prova_collect,
              prova_testo, prova_ricerca_testo, prova_manutenzione,
+             prova_trasloco_del_nome,
              prova_sessione_sopravvissuta,
              prova_sessione_dimezzata, prova_filtro_progetto]
     # `collect` apre l'archivio accanto allo script: durante le prove va
-    # spostato altrove, se no si scrive sul cm-local.db vero.
+    # spostato altrove, se no si scrive sul cam-local.db vero.
     vero_db_path = ar.db_path
     for prova in prove:
-        tmp = tempfile.mkdtemp(prefix="cm-arch-")
+        tmp = tempfile.mkdtemp(prefix="cam-arch-")
         base = os.path.join(tmp, "projects")
         os.makedirs(base, exist_ok=True)
-        ar.db_path = lambda _a=None, _t=tmp: os.path.join(_t, "cm-local.db")
+        ar.db_path = lambda _a=None, _t=tmp: os.path.join(_t, "cam-local.db")
         try:
             prova(tmp, base)
         finally:

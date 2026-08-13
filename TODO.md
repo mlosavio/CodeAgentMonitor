@@ -1,4 +1,4 @@
-# Backlog — claude-monitor
+# Backlog — CodeAgentMonitor
 
 Ogni voce è una **PF** (Product Feature) con un numero che **non cambia più e non viene
 riusato**: se una PF viene abbandonata resta qui marcata *scartata*, con il motivo. Un numero
@@ -33,7 +33,7 @@ quello che manca.
 
 **Stato:** fatto il 2026-08-13 · **Dipende da:** —
 
-`cm_copilot.py`, acceso di default (`copilot.enabled`), documentato nel
+`cam_copilot.py`, acceso di default (`copilot.enabled`), documentato nel
 [README](README.md#github-copilot) e provato da `test_copilot.py`. Sulla macchina di
 sviluppo legge 10 sessioni, 97 turni e 339 chiamate a strumenti.
 
@@ -137,7 +137,7 @@ sarebbero `acquisito` per definizione.
 
 **Stato:** fatto il 2026-08-13 · **Dipende da:** —
 
-`cm_statistiche.py`, la scheda **Andamento** e `--trend`. Documentato nel
+`cam_statistiche.py`, la scheda **Andamento** e `--trend`. Documentato nel
 [README](README.md#andamenti-e-indicatori), provato da `test_statistiche.py`.
 
 Le due domande aperte hanno avuto questa risposta:
@@ -151,7 +151,7 @@ Le due domande aperte hanno avuto questa risposta:
   colora solo se quel verso è certo.
 
 Rimasto fuori di proposito: la **serie storica delle postazioni attive** per il team.
-`cm_statistiche.adozione_team()` la calcolava già dall'archivio del raccoglitore ed era provata,
+`cam_statistiche.adozione_team()` la calcolava già dall'archivio del raccoglitore ed era provata,
 ma non era esposta da nessuna vista — poi PF13.
 
 ### PF05 — Frammenti di ricerca invece di un elenco filtrato
@@ -270,7 +270,7 @@ migrazione, è un secondo formato.**
 
 **Stato:** fatto il 2026-08-13 · **Dipende da:** —
 
-`python claude_monitor.py --archivio`: quanto pesa il file e da cosa, voce per voce, più i
+`python cam.py --archivio`: quanto pesa il file e da cosa, voce per voce, più i
 conteggi e cosa si può fare per farlo calare. La stessa frase compare in *Configura → Archivio*.
 
 I byte per tabella si contano **sui dati e non sulle pagine**: la vista `dbstat` che li darebbe
@@ -295,7 +295,7 @@ guardare — oggi, dopo PF09, sono 1,1 MB.
 Sviluppato e provato solo su Windows. Il codice usa percorsi portabili (`expanduser`,
 `USERPROFILE`/`LOCALAPPDATA`) e non ha dipendenze, ma «dovrebbe funzionare» non è «funziona».
 
-Da verificare in particolare: la forma canonica dei percorsi in `cm_archivio.chiave()`
+Da verificare in particolare: la forma canonica dei percorsi in `cam_archivio.chiave()`
 (`normcase` si comporta diversamente), la barra del titolo scura della GUI (è codice Windows), e
 il fatto che le prove girino.
 
@@ -307,7 +307,7 @@ il fatto che le prove girino.
 
 **Stato:** fatto il 2026-08-13 · **Dipende da:** —
 
-`cm_collector.segnala_anomalie()` marca ogni riga con `anomalia`: `non_in_fattura` (consuma e non
+`cam_collector.segnala_anomalie()` marca ogni riga con `anomalia`: `non_in_fattura` (consuma e non
 compare nell'export caricato) o `fatturata_ferma` (fatturata, nessun consumo misurato). Il
 riepilogo porta i **nomi**, non i conteggi.
 

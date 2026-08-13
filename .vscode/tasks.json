@@ -9,10 +9,10 @@
   ],
   "tasks": [
     {
-      "label": "monitor: GUI",
+      "label": "cam: GUI",
       "type": "shell",
       "command": "pythonw",
-      "args": ["claude_monitor_gui.py"],
+      "args": ["cam_gui.py"],
       "options": { "cwd": "${workspaceFolder}" },
       "isBackground": true,
       "problemMatcher": [],
@@ -24,10 +24,10 @@
       "detail": "Apre la finestra del monitor senza console"
     },
     {
-      "label": "monitor: GUI (console)",
+      "label": "cam: GUI (console)",
       "type": "shell",
       "command": "python",
-      "args": ["claude_monitor_gui.py"],
+      "args": ["cam_gui.py"],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": [],
       "presentation": {
@@ -38,10 +38,10 @@
       "detail": "Come sopra ma con la console visibile, per vedere i traceback"
     },
     {
-      "label": "monitor: watch",
+      "label": "cam: watch",
       "type": "shell",
       "command": "python",
-      "args": ["claude_monitor.py", "--watch", "--interval", "3"],
+      "args": ["cam.py", "--watch", "--interval", "3"],
       "options": { "cwd": "${workspaceFolder}" },
       "isBackground": true,
       "problemMatcher": [],
@@ -54,10 +54,10 @@
       "detail": "Cruscotto live nel terminale, da tenere accanto al panel di Claude Code"
     },
     {
-      "label": "monitor: per progetto (7g)",
+      "label": "cam: per progetto (7g)",
       "type": "shell",
       "command": "python",
-      "args": ["claude_monitor.py", "--by-project", "--since", "7d"],
+      "args": ["cam.py", "--by-project", "--since", "7d"],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": [],
       "group": { "kind": "build", "isDefault": true },
@@ -69,10 +69,10 @@
       "detail": "Totali per progetto dell'ultima settimana (Ctrl+Shift+B)"
     },
     {
-      "label": "monitor: sessione…",
+      "label": "cam: sessione…",
       "type": "shell",
       "command": "python",
-      "args": ["claude_monitor.py", "--session", "${input:sessionId}", "--top", "0"],
+      "args": ["cam.py", "--session", "${input:sessionId}", "--top", "0"],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": [],
       "presentation": {
@@ -83,10 +83,10 @@
       "detail": "Dettaglio turno per turno di una sessione"
     },
     {
-      "label": "monitor: svuota cache",
+      "label": "cam: svuota cache",
       "type": "shell",
       "command": "python",
-      "args": ["claude_monitor.py", "--clear-cache"],
+      "args": ["cam.py", "--clear-cache"],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "shared" },

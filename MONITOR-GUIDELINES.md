@@ -95,7 +95,7 @@ dove IN/OUT sono $ per token (listino / 1_000_000).
 
 ## 3. Design del CLI (proposto)
 
-`claude-monitor` (Python, nessuna dipendenza esterna obbligatoria):
+`CodeAgentMonitor` (Python, nessuna dipendenza esterna obbligatoria):
 
 - **Riepilogo** (default): elenca le conversazioni con durata, #messaggi, token (per tipo) e
   **costo stimato** per modello; totale in fondo. Filtri: `--project <nome|all>`, `--since`,
@@ -148,7 +148,7 @@ def summarize(rows, price):
 ```
 <cartella-del-progetto>\
   MONITOR-GUIDELINES.md   (questo file)
-  claude_monitor.py       (CLI)
+  cam.py       (CLI)
   pricing.json            (prezzi + moltiplicatori cache, con data)
   README.md
 ```
@@ -212,7 +212,7 @@ CLI JSONL. Per il solo "costo/tempo/messaggi per conversazione", il CLI JSONL ba
 ---
 
 ### TL;DR per la prossima sessione
-Costruisci `claude_monitor.py`: legge `~/.claude/projects/**/*.jsonl`, per ogni sessione
+Costruisci `cam.py`: legge `~/.claude/projects/**/*.jsonl`, per ogni sessione
 calcola durata (min/max timestamp), conta i messaggi per tipo e somma il costo per riga
 assistant con la formula §2 (attenzione a cache read/write 5m/1h) usando `pricing.json`.
 Aggiungi `--watch` sulla sessione attiva. OTEL (§4) solo se vuoi una dashboard live continua.

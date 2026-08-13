@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * cm-statusline.js — segmento di claude-code-monitor per la statusline di Claude Code.
+ * cam-statusline.js — segmento di CodeAgentMonitor per la statusline di Claude Code.
  *
  * Mostra costo, tempo attivo, messaggi e consumo dei limiti della sessione corrente:
  *
  *     $3.42 · 18m · 26 · 5h 31%
  *
  * Se avevi già una statusline, la si può avvolgere invece di sostituirla:
- * `statusline.wrap_command` in config.json (o la variabile CM_SL_WRAP) indica un
+ * `statusline.wrap_command` in config.json (o la variabile CAM_SL_WRAP) indica un
  * comando da eseguire, di cui si cattura l'output e a cui si appende il segmento.
  * Quel comando non viene mai modificato: gira come processo figlio.
  *
@@ -19,20 +19,20 @@
  * I prezzi restano single-source: si legge lo stesso pricing.json del CLI, si
  * duplica solo la formula — e `--selftest` la confronta col CLI.
  *
- * Stato incrementale in ~/.claude/cache/cm-statusline/<sessionId>.{sum,keys}.json
+ * Stato incrementale in ~/.claude/cache/cam-statusline/<sessionId>.{sum,keys}.json
  * così ogni render legge solo i byte aggiunti al transcript.
  *
  * Qualunque errore => stampa l'output avvolto invariato ed esce 0: la statusline
  * non deve mai rompersi né rallentare Claude Code.
  *
  * Variabili d'ambiente (tutte facoltative):
- *   CM_CONFIG           percorso esatto di config.json
- *   CM_PROJECT_DIR      cartella del progetto (ci cerca config.json dentro)
- *   CM_SL_DISABLE=1     disattiva il segmento (resta solo la statusline avvolta)
- *   CM_SL_WRAP          comando da avvolgere, JSON o separato da spazi
- *   CM_SL_BUDGET_MS     budget di calcolo per render (default 150)
- *   CM_SL_MAX_BYTES     arretrato massimo letto per render (default 8388608)
- *   CM_SL_IDLE_GAP      soglia di inattività in secondi (default 300)
+ *   CAM_CONFIG           percorso esatto di config.json
+ *   CAM_PROJECT_DIR      cartella del progetto (ci cerca config.json dentro)
+ *   CAM_SL_DISABLE=1     disattiva il segmento (resta solo la statusline avvolta)
+ *   CAM_SL_WRAP          comando da avvolgere, JSON o separato da spazi
+ *   CAM_SL_BUDGET_MS     budget di calcolo per render (default 150)
+ *   CAM_SL_MAX_BYTES     arretrato massimo letto per render (default 8388608)
+ *   CAM_SL_IDLE_GAP      soglia di inattività in secondi (default 300)
  */
 
 'use strict';
@@ -44,30 +44,37 @@ const { spawn } = require('child_process');
 
 const HOME = os.homedir();
 const CLAUDE_DIR = path.join(HOME, '.claude');
-const CACHE_DIR = path.join(CLAUDE_DIR, 'cache', 'cm-statusline');
+const CACHE_DIR = path.join(CLAUDE_DIR, 'cache', 'cam-statusline');
 /**
  * Dove sta config.json, in ordine:
- *   1. CM_CONFIG            percorso esatto del file
- *   2. CM_PROJECT_DIR       cartella del progetto
- *   3. ~/.claude/cm-statusline.json  ({"project_dir": "..."}), scritto da install.py
+ *   1. CAM_CONFIG            percorso esatto del file
+ *   2. CAM_PROJECT_DIR       cartella del progetto
+ *   3. ~/.claude/cam-statusline.json  ({"project_dir": "..."}), scritto da install.py
  * Se non si trova, il segmento non viene mostrato ma la statusline continua a
  * funzionare: mai rompere quello che l'utente aveva già.
  */
 function resolveConfigPath() {
-  if (process.env.CM_CONFIG) return process.env.CM_CONFIG;
-  if (process.env.CM_PROJECT_DIR) return path.join(process.env.CM_PROJECT_DIR, 'config.json');
-  try {
-    const link = JSON.parse(
-      fs.readFileSync(path.join(CLAUDE_DIR, 'cm-statusline.json'), 'utf8'));
-    if (link && link.project_dir) return path.join(link.project_dir, 'config.json');
-    if (link && link.config) return link.config;
-  } catch (e) { /* non installato: nessun segmento */ }
-  return null;
+  // I nomi CM_* sono quelli di prima che il progetto si chiamasse CAM: si
+  // continuano a leggere, perché stanno nell'ambiente di chi li ha impostati e
+  // non in un file che possiamo aggiornare noi.
+  const env = (nuovo, vecchio) => process.env[nuovo] || process.env[vecchio];
+  const cfg = env('CAM_CONFIG', 'CM_CONFIG');
+  if (cfg) return cfg;
+  const dir = env('CAM_PROJECT_DIR', 'CM_PROJECT_DIR');
+  if (dir) return path.join(dir, 'config.json');
+  for (const nome of ['cam-statusline.json', 'cm-statusline.json']) {
+    try {
+      const link = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, nome), 'utf8'));
+      if (link && link.project_dir) return path.join(link.project_dir, 'config.json');
+      if (link && link.config) return link.config;
+    } catch (e) { /* prova il nome successivo */ }
+  }
+  return null;  /* non installato: nessun segmento */
 }
 
 const PRICING_PATH = resolveConfigPath();
 
-const IDLE_GAP = Number(process.env.CM_SL_IDLE_GAP || 300);
+const IDLE_GAP = Number((process.env.CAM_SL_IDLE_GAP || process.env.CM_SL_IDLE_GAP) || 300);
 
 const STATE_VERSION = 1;
 const SEP = '\x1b[2m │ \x1b[0m';
@@ -75,7 +82,7 @@ const SEP = '\x1b[2m │ \x1b[0m';
 const FIELDS = ['input', 'output', 'cache_read', 'cache_w5m', 'cache_w1h', 'web_search', 'web_fetch'];
 
 // --------------------------------------------------------------------------- //
-// Listino e formula di costo (port di claude_monitor.py)
+// Listino e formula di costo (port di cam.py)
 // --------------------------------------------------------------------------- //
 
 const DEFAULT_PRICING = {
@@ -107,8 +114,10 @@ function slOptions(pricing) {
   };
   Object.assign(d, (pricing && pricing.statusline) || {});
   // le variabili d'ambiente restano l'ultima parola, per poter provare al volo
-  if (process.env.CM_SL_BUDGET_MS) d.budget_ms = Number(process.env.CM_SL_BUDGET_MS);
-  if (process.env.CM_SL_MAX_BYTES) d.max_bytes_per_render = Number(process.env.CM_SL_MAX_BYTES);
+  const budget = process.env.CAM_SL_BUDGET_MS || process.env.CM_SL_BUDGET_MS;
+  const maxBytes = process.env.CAM_SL_MAX_BYTES || process.env.CM_SL_MAX_BYTES;
+  if (budget) d.budget_ms = Number(budget);
+  if (maxBytes) d.max_bytes_per_render = Number(maxBytes);
   return d;
 }
 
@@ -671,14 +680,14 @@ function main() {
     const pricing = loadPricing();
     const opt = slOptions(pricing);
     let wrap = opt.wrap_command;
-    if (process.env.CM_SL_WRAP) {
-      try { wrap = JSON.parse(process.env.CM_SL_WRAP); }
-      catch (e) { wrap = process.env.CM_SL_WRAP.split(' '); }
+    if ((process.env.CAM_SL_WRAP || process.env.CM_SL_WRAP)) {
+      try { wrap = JSON.parse((process.env.CAM_SL_WRAP || process.env.CM_SL_WRAP)); }
+      catch (e) { wrap = (process.env.CAM_SL_WRAP || process.env.CM_SL_WRAP).split(' '); }
     }
     const wrapped = runWrapped(wrap, raw, opt.wrap_timeout_ms);
 
     let segment = null;
-    if (!process.env.CM_SL_DISABLE && opt.enabled) {
+    if (!(process.env.CAM_SL_DISABLE || process.env.CM_SL_DISABLE) && opt.enabled) {
       try {
         let payload = {};
         try { payload = JSON.parse(raw) || {}; } catch (e) { payload = {}; }
@@ -697,7 +706,7 @@ function main() {
         if (limits) segment = segment ? segment + opt.separator + limits : limits;
       } catch (e) {
         segment = null;
-        if (process.env.CM_SL_DEBUG) process.stderr.write('[cm-statusline] ' + (e && e.stack || e) + '\n');
+        if ((process.env.CAM_SL_DEBUG || process.env.CM_SL_DEBUG)) process.stderr.write('[cam-statusline] ' + (e && e.stack || e) + '\n');
       }
     }
 

@@ -5,11 +5,11 @@ Prova di scenario: la catena intera, con piu' postazioni, sopra HTTP vero.
 
 Le prove di test_collector.py chiamano le funzioni direttamente. Questa invece
 avvia un raccoglitore vero su una porta libera e ci parla via rete, come fanno
-Claude Code e cm_agent: serializzazione, rotte, token, unione delle fonti e
+Claude Code e cam_agent: serializzazione, rotte, token, unione delle fonti e
 pannello. E' l'unico modo per accorgersi degli errori che stanno fra i pezzi
 invece che dentro un pezzo.
 
-Usa un archivio temporaneo: non tocca cm-team.db.
+Usa un archivio temporaneo: non tocca cam-team.db.
 
     python test_scenario.py
 """
@@ -27,7 +27,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-import cm_collector as cc
+import cam_collector as cc
 
 try:  # console Windows: senza questo l'output rediretto muore sugli accenti
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -131,7 +131,7 @@ def datapoint(metrica, valore, utente, sid, tipo=None):
 
 # --------------------------------------------------------------------------- #
 
-cartella = tempfile.mkdtemp(prefix="cm-scenario-")
+cartella = tempfile.mkdtemp(prefix="cam-scenario-")
 db = os.path.join(cartella, "scenario.db")
 
 store = cc.Store(db, cc.make_privacy("pseudonimo", os.path.join(cartella, "k.key")),
@@ -196,7 +196,7 @@ try:
     print("-" * 72)
     for macchina, utente, sessioni in POSTAZIONI:
         corpo = {
-            "agent": "cm-agent/prova", "machine": macchina, "user": utente,
+            "agent": "cam-agent/prova", "machine": macchina, "user": utente,
             "attrs": {"user.email": utente},
             "sessions": [sessione(*s) for s in sessioni],
         }

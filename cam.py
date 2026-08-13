@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-claude-monitor — tempo, costo e messaggi delle conversazioni Claude Code.
+CodeAgentMonitor — tempo, costo e messaggi delle conversazioni Claude Code.
 
 Legge i transcript JSONL scritti da Claude Code in
     ~/.claude/projects/<project-encoded>/<session-uuid>.jsonl
@@ -14,13 +14,13 @@ riga per riga, usando il modello di quella riga e il listino di pricing.json.
 Solo stdlib. Vedi README.md per i dettagli.
 
 Uso rapido:
-    python claude_monitor.py                     # ultime sessioni
-    python claude_monitor.py --since 7d --top 30
-    python claude_monitor.py --project MioProgetto
-    python claude_monitor.py --by-project
-    python claude_monitor.py --session a1b2c3d4  # dettaglio turno per turno
-    python claude_monitor.py --watch             # live sulla sessione attiva
-    python claude_monitor.py --json              # output machine-readable
+    python cam.py                     # ultime sessioni
+    python cam.py --since 7d --top 30
+    python cam.py --project MioProgetto
+    python cam.py --by-project
+    python cam.py --session a1b2c3d4  # dettaglio turno per turno
+    python cam.py --watch             # live sulla sessione attiva
+    python cam.py --json              # output machine-readable
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ import re
 import sys
 import time
 
-import cm_archivio
-import cm_copilot
-import cm_statistiche as cm_stat
+import cam_archivio
+import cam_copilot
+import cam_statistiche as cam_stat
 
 __version__ = "1.0.0"
 
@@ -1149,14 +1149,14 @@ def apri_archivio_lettura():
     conversazione non deve poter far ripartire una riscansione.
     """
     try:
-        return cm_archivio.Archivio(cm_archivio.db_path(), CACHE_FORMAT,
+        return cam_archivio.Archivio(cam_archivio.db_path(), CACHE_FORMAT,
                                     sola_lettura=True)
     except Exception:
         return None
 
 
 def apri_archivio(use_cache: bool, quiet: bool = False, testo: bool = False):
-    """Apre `cm-local.db`, traslocando la vecchia cache JSON la prima volta.
+    """Apre `cam-local.db`, traslocando la vecchia cache JSON la prima volta.
 
     Con `--no-cache` non si apre niente: quel flag vuol dire "non toccare il
     disco", e vale anche per l'archivio.
@@ -1169,7 +1169,7 @@ def apri_archivio(use_cache: bool, quiet: bool = False, testo: bool = False):
     if not use_cache:
         return None
     try:
-        arch = cm_archivio.Archivio(cm_archivio.db_path(), CACHE_FORMAT, testo=testo)
+        arch = cam_archivio.Archivio(cam_archivio.db_path(), CACHE_FORMAT, testo=testo)
     except Exception as exc:
         if not quiet:
             warn(f"archivio non disponibile ({exc}): rileggo tutto")
@@ -1178,7 +1178,7 @@ def apri_archivio(use_cache: bool, quiet: bool = False, testo: bool = False):
         vecchia = cache_path()
         if os.path.exists(vecchia):
             if not arch.conta()["file"]:
-                n = cm_archivio.importa_cache_json(arch, vecchia, CACHE_FORMAT)
+                n = cam_archivio.importa_cache_json(arch, vecchia, CACHE_FORMAT)
                 if n and not quiet:
                     info(f"archivio: {n} transcript ripresi dalla vecchia cache")
             os.remove(vecchia)
@@ -1461,13 +1461,13 @@ def collect(base: str, pricing: dict, use_cache: bool, idle_gap: float,
                 continue
             # I file esclusi dal filtro restano comunque "vivi": esistono, e la
             # potatura toglie solo quelli spariti davvero.
-            vivi.add(cm_archivio.chiave(path))
+            vivi.add(cam_archivio.chiave(path))
             if project and not path_matches_project(path, project):
                 if on_progress is not None:
                     on_progress(done, total_files, path, True)
                 continue
 
-            voce = indice.get(cm_archivio.chiave(path))
+            voce = indice.get(cam_archivio.chiave(path))
             rec = None
             if (voce and voce[0] == st.st_size
                     and abs(voce[1] - st.st_mtime) < 0.001):
@@ -1523,11 +1523,11 @@ def collect(base: str, pricing: dict, use_cache: bool, idle_gap: float,
         # `pota`, che ragiona sui transcript, e le sue righe sono acquisite per
         # definizione — quel formato non e' documentato e domani puo' cambiare.
         if copilot_of(pricing)["enabled"]:
-            copilot = [s for s in cm_copilot.sessioni(keep_messages=tieni_testo)
+            copilot = [s for s in cam_copilot.sessioni(keep_messages=tieni_testo)
                        if sessione_nel_progetto(s, project)]
             if copilot:
                 if arch:
-                    arch.scrivi_sessioni(copilot, fonte=cm_copilot.FONTE)
+                    arch.scrivi_sessioni(copilot, fonte=cam_copilot.FONTE)
                     if tieni_testo:
                         for s in copilot:
                             arch.scrivi_messaggi(
@@ -1543,7 +1543,7 @@ def collect(base: str, pricing: dict, use_cache: bool, idle_gap: float,
             # o VS Code le sue.
             attive = {"claude-code"}
             if copilot_of(pricing)["enabled"]:
-                attive.add(cm_copilot.FONTE)
+                attive.add(cam_copilot.FONTE)
             orfane = [o for o in arch.sessioni_orfane(
                           {s["session_id"] for s in out}, fonti=attive)
                       if sessione_nel_progetto(o, project)]
@@ -2191,12 +2191,12 @@ def view_archivio() -> int:
     E' la scheda di manutenzione: senza sapere cos'e' che occupa spazio, le
     uniche mosse possibili sono cancellare tutto o non toccare niente.
     """
-    path = cm_archivio.db_path()
+    path = cam_archivio.db_path()
     if not os.path.isfile(path):
         info("nessun archivio: verra' creato alla prima scansione.")
         return 0
     try:
-        with cm_archivio.Archivio(path, CACHE_FORMAT, sola_lettura=True) as arch:
+        with cam_archivio.Archivio(path, CACHE_FORMAT, sola_lettura=True) as arch:
             c, p = arch.conta(), arch.peso()
     except Exception as exc:
         warn(f"archivio non apribile: {exc}")
@@ -2416,11 +2416,11 @@ def view_trend(sessions: list[dict], pricing: dict, args) -> None:
         print()
         info("nessun turno da cui ricavare un andamento")
         return
-    iv = cm_stat.intervallo(turni)
-    grana = getattr(args, "grana", None) or cm_stat.grana_consigliata(*iv)
-    punti = cm_stat.serie(turni, grana)
+    iv = cam_stat.intervallo(turni)
+    grana = getattr(args, "grana", None) or cam_stat.grana_consigliata(*iv)
+    punti = cam_stat.serie(turni, grana)
 
-    nome = dict((g[0], g[1]) for g in cm_stat.GRANULARITA)[grana]
+    nome = dict((g[0], g[1]) for g in cam_stat.GRANULARITA)[grana]
     print()
     print(C.w(f"  Andamento {BULLET} per {nome.lower()} {BULLET} "
               f"dal {iv[0].strftime('%d/%m/%Y')} al {iv[1].strftime('%d/%m/%Y')}",
@@ -2460,14 +2460,14 @@ def view_trend(sessions: list[dict], pricing: dict, args) -> None:
     inizio = fine - dt.timedelta(days=giorni)
     t0 = dt.datetime.combine(inizio, dt.time.min).timestamp()
     recenti = [t for t in turni if t.get("ts") and t["ts"] >= t0]
-    prec = cm_stat.finestra_precedente(turni, inizio, fine)
+    prec = cam_stat.finestra_precedente(turni, inizio, fine)
 
     print()
     print(C.w(f"  Indicatori {BULLET} ultimi {giorni} giorni "
               f"contro i {giorni} precedenti", C.BOLD))
     righe = []
     stili = {}
-    for k in cm_stat.indicatori(recenti, prec, turni):
+    for k in cam_stat.indicatori(recenti, prec, turni):
         d = k["delta"]
         if d is None:
             var = "—" if UNI else "-"
@@ -2801,7 +2801,7 @@ def export_conversations(sessions: list[dict], base: str, pricing: dict,
                          on_progress=None) -> dict:
     """Scrive una cartella con un indice e una conversazione per file.
 
-    Le sessioni vengono rilette una a una dai transcript, e da `cm-local.db`
+    Le sessioni vengono rilette una a una dai transcript, e da `cam-local.db`
     quelle il cui transcript non c'e' piu' — sempre che il testo fosse
     archiviato, altrimenti finiscono fra quelle non leggibili. Ritorna un
     riepilogo di quello che ha scritto.
@@ -2965,7 +2965,7 @@ def view_detail(base: str, pricing: dict, args) -> None:
 
 
 def view_watch(base: str, pricing: dict, args) -> None:
-    print(C.w(f"  claude-monitor {BULLET} avvio, analisi del transcript…", C.DIM))
+    print(C.w(f"  CAM {BULLET} avvio, analisi del transcript…", C.DIM))
     prev_cost = None
     prev_sid = None
     live: dict[str, LiveFile] = {}
@@ -3012,7 +3012,7 @@ def view_watch(base: str, pricing: dict, args) -> None:
             delta = "" if prev_cost is None else f"  (+{h_cost(max(0.0, sess['cost'] - prev_cost))})"
             elapsed = time.time() - (sess["start"] or time.time())
 
-            print(C.w(f"  claude-monitor {BULLET} LIVE   {dt.datetime.now():%H:%M:%S}   "
+            print(C.w(f"  CAM {BULLET} LIVE   {dt.datetime.now():%H:%M:%S}   "
                       f"agg. ogni {args.interval}s   Ctrl-C per uscire", C.BOLD))
             print(C.w(f"  {HR * 78}", C.DIM))
             print(f"  {C.w('progetto', C.DIM)}  {C.w(sess['project'] or '?', C.BOLD)}"
@@ -3201,24 +3201,24 @@ def default_base() -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="claude-monitor",
+        prog="cam",
         description="Tempo, costo e messaggi delle conversazioni Claude Code (dai transcript JSONL).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""esempi:
-  claude_monitor.py                        riepilogo delle ultime 20 sessioni
-  claude_monitor.py --since 7d --top 50    ultima settimana
-  claude_monitor.py --project MioProgetto   filtra per progetto
-  claude_monitor.py --by-project           totali aggregati per progetto
-  claude_monitor.py --session a1b2c3d4     dettaglio turno per turno
-  claude_monitor.py --traces               un turno per riga, di tutte le sessioni
-  claude_monitor.py --traces --search bug  cerca nei prompt e negli strumenti
-  claude_monitor.py --watch                cruscotto live sulla sessione attiva
-  claude_monitor.py --by-month             consumo, quota pagata e resa per mese
-  claude_monitor.py --json > report.json   output machine-readable
+  cam.py                        riepilogo delle ultime 20 sessioni
+  cam.py --since 7d --top 50    ultima settimana
+  cam.py --project MioProgetto   filtra per progetto
+  cam.py --by-project           totali aggregati per progetto
+  cam.py --session a1b2c3d4     dettaglio turno per turno
+  cam.py --traces               un turno per riga, di tutte le sessioni
+  cam.py --traces --search bug  cerca nei prompt e negli strumenti
+  cam.py --watch                cruscotto live sulla sessione attiva
+  cam.py --by-month             consumo, quota pagata e resa per mese
+  cam.py --json > report.json   output machine-readable
 
 configurazione (abbonamento, listino, tema, default):
   """ + (config_candidates()[0]) + """
-  claude_monitor.py --config <file>        per usarne un altro
+  cam.py --config <file>        per usarne un altro
 """,
     )
     p.add_argument("--base", default=default_base(),
@@ -3254,7 +3254,7 @@ configurazione (abbonamento, listino, tema, default):
     p.add_argument("--trend", action="store_true",
                    help="andamento nel tempo e indicatori: uso, adozione, "
                         "cache, turni interrotti")
-    p.add_argument("--grana", choices=[g[0] for g in cm_stat.GRANULARITA],
+    p.add_argument("--grana", choices=[g[0] for g in cam_stat.GRANULARITA],
                    help="con --trend: ampiezza del periodo (default: scelta "
                         "in base all'intervallo coperto)")
     p.add_argument("--finestra", type=int, metavar="GIORNI",
@@ -3282,7 +3282,7 @@ configurazione (abbonamento, listino, tema, default):
                         "--project e --since): un turno per riga, con domanda, "
                         "risposta, costo ed esito")
     p.add_argument("--no-color", action="store_true", help="disabilita i colori")
-    p.add_argument("--version", action="version", version=f"claude-monitor {__version__}")
+    p.add_argument("--version", action="version", version=f"CodeAgentMonitor {__version__}")
     return p
 
 
@@ -3296,7 +3296,7 @@ def main(argv=None) -> int:
         except FileNotFoundError:
             pass
         try:
-            with cm_archivio.Archivio(cm_archivio.db_path(), CACHE_FORMAT) as arch:
+            with cam_archivio.Archivio(cam_archivio.db_path(), CACHE_FORMAT) as arch:
                 n = arch.svuota_cache()
                 c = arch.conta()
         except Exception as exc:
@@ -3314,7 +3314,7 @@ def main(argv=None) -> int:
 
     if args.dimentica_testo:
         try:
-            with cm_archivio.Archivio(cm_archivio.db_path(), CACHE_FORMAT) as arch:
+            with cam_archivio.Archivio(cam_archivio.db_path(), CACHE_FORMAT) as arch:
                 n = arch.dimentica_testo()
                 # Senza VACUUM le pagine restano dentro il file: a chi ha appena
                 # chiesto di dimenticare qualcosa, un file grande uguale sembra
