@@ -642,13 +642,18 @@ Then **restart Claude Code**: environment variables are read at startup. The das
 
 ### Setting it up for a team
 
-> **Seats not all on the same network?** Then this procedure is not enough — it opens the port
-> in clear text and hands every seat a token that also opens the dashboard. For homes, several
-> offices and people travelling — and for the case where **only an administrator may see the
-> panel** — there is a separate guide (in Italian):
-> **[Attivare CAM in un team distribuito geograficamente](docs/team-distribuito.md)**. It covers
-> TLS behind a reverse proxy, splitting the write routes from the read ones, and how the admin
-> gets the full panel when the archive lives elsewhere.
+Two step-by-step guides live in [`docs/`](docs/) (in Italian), each with a standalone HTML page
+you can keep open next to the terminal:
+
+| | When |
+|---|---|
+| **[Team in sede](docs/team-in-sede.md)** | all seats on the same corporate network |
+| **[Team distribuito](docs/team-distribuito.md)** | homes, several offices, people travelling — and the panel restricted to one administrator |
+
+> **Seats not all on the same network?** Then the outline below is not enough — it opens the port
+> in clear text and hands every seat a token that also opens the dashboard. The second guide
+> covers TLS behind a reverse proxy, splitting the write routes from the read ones, and how the
+> admin gets the full panel when the archive lives elsewhere.
 
 The full, ordered runbook — collector first, because its address is what the seats need — is in
 the Italian README under

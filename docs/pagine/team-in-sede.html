@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attivazione CAM nel team</title>
+<style>
+/* azzeramento minimo, come quello che l'ambiente di pubblicazione aggiunge da se' */
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; }
+</style>
+</head>
+<body>
+<style>
+  /* ---- Palette: inchiostro da registro contabile ------------------------ */
+  :root {
+    --carta:      #F5F6F8;
+    --carta-alta: #FFFFFF;
+    --carta-cava: #ECEEF2;
+    --inchiostro: #16202B;
+    --inchiostro-fioco: #4A5766;
+    --inchiostro-tenue: #6E7B8A;
+    --filo:       #D3D9E1;
+    --filo-forte: #B7C0CC;
+    --timbro:     #2B5C8A;
+    --segnale:    #A83E26;
+    --verificato: #35674D;
+    --evidenza:   rgba(43, 92, 138, 0.09);
+    --allarme-fondo: rgba(168, 62, 38, 0.07);
+    --ok-fondo:      rgba(53, 103, 77, 0.08);
+    --ombra: 0 1px 2px rgba(22, 32, 43, .05), 0 6px 18px -10px rgba(22, 32, 43, .22);
+
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", "DejaVu Sans Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --carta:      #131A22;
+      --carta-alta: #1A222C;
+      --carta-cava: #0E141A;
+      --inchiostro: #DDE4EC;
+      --inchiostro-fioco: #A3AEBC;
+      --inchiostro-tenue: #7C8899;
+      --filo:       #2A343F;
+      --filo-forte: #3B4753;
+      --timbro:     #7FB2DE;
+      --segnale:    #E0805F;
+      --verificato: #7EB496;
+      --evidenza:   rgba(127, 178, 222, 0.12);
+      --allarme-fondo: rgba(224, 128, 95, 0.10);
+      --ok-fondo:      rgba(126, 180, 150, 0.10);
+      --ombra: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px -12px rgba(0, 0, 0, .7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --carta:      #131A22;
+    --carta-alta: #1A222C;
+    --carta-cava: #0E141A;
+    --inchiostro: #DDE4EC;
+    --inchiostro-fioco: #A3AEBC;
+    --inchiostro-tenue: #7C8899;
+    --filo:       #2A343F;
+    --filo-forte: #3B4753;
+    --timbro:     #7FB2DE;
+    --segnale:    #E0805F;
+    --verificato: #7EB496;
+    --evidenza:   rgba(127, 178, 222, 0.12);
+    --allarme-fondo: rgba(224, 128, 95, 0.10);
+    --ok-fondo:      rgba(126, 180, 150, 0.10);
+    --ombra: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px -12px rgba(0, 0, 0, .7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--carta);
+    color: var(--inchiostro);
+    font-family: var(--sans);
+    font-size: 16.5px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 1.25rem 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .foglio { max-width: 54rem; margin: 0 auto; }
+
+  /* ---- Testata --------------------------------------------------------- */
+  .testata {
+    display: flex; flex-direction: column; gap: .9rem;
+    padding: 3.2rem 0 1.6rem;
+    border-bottom: 2px solid var(--inchiostro);
+  }
+  .occhiello {
+    font-family: var(--mono);
+    font-size: .72rem; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--inchiostro-tenue);
+  }
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(2.1rem, 5.5vw, 3.05rem);
+    line-height: 1.08; font-weight: 600; margin: 0;
+    letter-spacing: -.015em; text-wrap: balance;
+  }
+  .sommario {
+    font-size: 1.09rem; color: var(--inchiostro-fioco);
+    max-width: 46rem; margin: 0;
+  }
+
+  /* ---- Sezioni --------------------------------------------------------- */
+  section { padding-top: 3.2rem; }
+  h2 {
+    font-family: var(--serif);
+    font-size: 1.72rem; line-height: 1.2; font-weight: 600;
+    margin: 0 0 .35rem; letter-spacing: -.01em; text-wrap: balance;
+  }
+  h3 {
+    font-size: 1.03rem; font-weight: 650; margin: 2.1rem 0 .5rem;
+    letter-spacing: -.005em;
+  }
+  .sotto-titolo {
+    color: var(--inchiostro-tenue); font-size: .95rem; margin: 0 0 1.5rem;
+  }
+  p { margin: 0 0 1rem; max-width: 44rem; }
+  a { color: var(--timbro); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--timbro); outline-offset: 3px; border-radius: 2px;
+  }
+  strong { font-weight: 650; }
+  code {
+    font-family: var(--mono); font-size: .88em;
+    background: var(--carta-cava); border: 1px solid var(--filo);
+    padding: .06em .34em; border-radius: 3px;
+  }
+
+  /* ---- Le tre macchine: chip che etichetta ogni comando ---------------- */
+  .macchina {
+    display: inline-flex; align-items: center; gap: .42rem;
+    font-family: var(--mono); font-size: .68rem;
+    letter-spacing: .09em; text-transform: uppercase;
+    padding: .2rem .5rem .22rem; border-radius: 3px;
+    border: 1px solid currentColor; white-space: nowrap;
+  }
+  .m-racc    { color: var(--timbro); }
+  .m-console { color: var(--verificato); }
+  .m-post    { color: var(--segnale); }
+
+  /* ---- Diagramma ------------------------------------------------------- */
+  .schema {
+    margin: 2rem 0 0; padding: 1.5rem 1.2rem 1.1rem;
+    background: var(--carta-alta); border: 1px solid var(--filo);
+    border-radius: 6px; box-shadow: var(--ombra);
+    overflow-x: auto;
+  }
+  .schema svg { display: block; min-width: 30rem; width: 100%; height: auto; }
+  /* Lo stile del diagramma sta qui e non negli attributi di presentazione:
+     var() dentro un attributo SVG non risolve in modo affidabile. */
+  .schema svg text { font-family: var(--sans); font-size: 13px; fill: var(--inchiostro); }
+  .schema svg .etichetta { font-size: 11.5px; fill: var(--inchiostro-tenue); }
+  .schema svg .glossa    { font-size: 11px;   fill: var(--inchiostro-tenue); }
+  .schema svg .nome      { font-weight: 650; }
+  .schema svg .scatola   { fill: var(--carta-alta); stroke-width: 1.5px; }
+  .schema svg .scatola.forte { stroke-width: 1.8px; }
+  .schema svg .vuota     { fill: none; stroke-width: 1.5px; }
+  .schema svg .b-post    { stroke: var(--segnale); }
+  .schema svg .b-racc    { stroke: var(--timbro); }
+  .schema svg .b-console { stroke: var(--verificato); }
+  .schema svg .flusso {
+    stroke: var(--inchiostro-fioco); stroke-width: 1.4px; fill: none;
+    color: var(--inchiostro-fioco);
+  }
+  .schema svg .punta { fill: var(--inchiostro-fioco); }
+  .schema figcaption {
+    font-size: .85rem; color: var(--inchiostro-tenue);
+    margin-top: 1rem; padding-top: .8rem; border-top: 1px solid var(--filo);
+  }
+
+  /* ---- Passi ----------------------------------------------------------- */
+  .passi { list-style: none; margin: 1.6rem 0 0; padding: 0;
+           display: flex; flex-direction: column; gap: 2.1rem; counter-reset: p; }
+  .passo { display: grid; grid-template-columns: 2.35rem 1fr; gap: 0 1rem; counter-increment: p; }
+  .passo::before {
+    content: counter(p, decimal-leading-zero);
+    font-family: var(--mono); font-size: .78rem; font-variant-numeric: tabular-nums;
+    color: var(--inchiostro-tenue); padding-top: .28rem;
+    border-top: 2px solid var(--filo-forte); align-self: start;
+  }
+  .passo > .corpo { min-width: 0; }
+  .passo h3 { margin-top: 0; }
+  .passo p:last-child { margin-bottom: 0; }
+
+  /* ---- Blocchi comando ------------------------------------------------- */
+  .comando { margin: .9rem 0 1rem; }
+  .comando-testa {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+    margin-bottom: .45rem;
+  }
+  .comando-dove { font-size: .82rem; color: var(--inchiostro-tenue); }
+  pre {
+    margin: 0; padding: .95rem 1.05rem;
+    background: var(--carta-cava);
+    border: 1px solid var(--filo); border-left: 3px solid var(--filo-forte);
+    border-radius: 4px; overflow-x: auto;
+    font-family: var(--mono); font-size: .845rem; line-height: 1.62;
+    color: var(--inchiostro);
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+  .cm { color: var(--inchiostro-tenue); }
+
+  /* ---- Riquadri -------------------------------------------------------- */
+  .nota {
+    margin: 1.4rem 0; padding: 1rem 1.15rem;
+    border: 1px solid var(--filo); border-radius: 5px;
+    background: var(--carta-alta); font-size: .955rem;
+  }
+  .nota > :last-child { margin-bottom: 0; }
+  .nota-titolo {
+    display: block; font-size: .73rem; font-family: var(--mono);
+    letter-spacing: .11em; text-transform: uppercase;
+    margin-bottom: .45rem;
+  }
+  .nota.rischio { background: var(--allarme-fondo); border-color: var(--segnale); }
+  .nota.rischio .nota-titolo { color: var(--segnale); }
+  .nota.prova { background: var(--ok-fondo); border-color: var(--verificato); }
+  .nota.prova .nota-titolo { color: var(--verificato); }
+  .nota.info { background: var(--evidenza); border-color: var(--filo-forte); }
+  .nota.info .nota-titolo { color: var(--timbro); }
+
+  /* ---- Tabelle --------------------------------------------------------- */
+  .tabella-cont { overflow-x: auto; margin: 1.3rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .93rem; min-width: 26rem; }
+  th, td {
+    text-align: left; padding: .6rem .8rem .6rem 0;
+    border-bottom: 1px solid var(--filo); vertical-align: top;
+  }
+  th {
+    font-size: .72rem; font-family: var(--mono); letter-spacing: .09em;
+    text-transform: uppercase; color: var(--inchiostro-tenue);
+    border-bottom: 1px solid var(--filo-forte); white-space: nowrap;
+  }
+  td code { white-space: nowrap; }
+
+  /* ---- Liste ----------------------------------------------------------- */
+  ul.punti { margin: 1rem 0; padding-left: 1.15rem; max-width: 44rem; }
+  ul.punti li { margin-bottom: .55rem; }
+  ul.punti li::marker { color: var(--inchiostro-tenue); }
+
+  /* ---- Chiusura -------------------------------------------------------- */
+  .chiusura {
+    margin-top: 3.5rem; padding-top: 1.4rem;
+    border-top: 1px solid var(--filo);
+    font-size: .88rem; color: var(--inchiostro-tenue);
+  }
+  @media (max-width: 34rem) {
+    .passo { grid-template-columns: 1fr; gap: .5rem; }
+    .passo::before { border-top: 0; padding-top: 0; }
+  }
+</style>
+
+<div class="foglio">
+
+  <header class="testata">
+    <div class="occhiello">CodeAgentMonitor · runbook di attivazione</div>
+    <h1>Attivazione CAM nel team</h1>
+    <p class="sommario">Dodici passi su tre macchine, nell'ordine in cui vanno fatti. Ogni comando
+    porta scritto <strong>dove</strong> si esegue: sbagliare macchina è il modo più comune di
+    rompere questa catena, e il secondo è dimenticare di riavviare Claude Code.</p>
+  </header>
+
+  <section id="schema">
+    <h2>Cosa stai per costruire</h2>
+    <p class="sotto-titolo">Tre ruoli, non tre programmi: due di questi girano sulla stessa macchina.</p>
+
+    <figure class="schema">
+      <svg viewBox="0 0 720 250" role="img" aria-label="Le postazioni mandano telemetria e storico al raccoglitore, che scrive nell'archivio; la console legge l'archivio come file.">
+        <defs>
+          <marker id="freccia" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path class="punta" d="M 0 0 L 10 5 L 0 10 z"/>
+          </marker>
+        </defs>
+
+        <!-- postazioni: due schede sovrapposte, perché sono molte -->
+        <rect class="vuota b-post" x="8" y="18" width="176" height="52" rx="4"/>
+        <rect class="scatola b-post" x="16" y="28" width="176" height="52" rx="4"/>
+        <text class="nome" x="30" y="50">Ogni postazione</text>
+        <text class="etichetta" x="30" y="68">cam_agent.py + Claude Code</text>
+
+        <!-- raccoglitore -->
+        <rect class="scatola forte b-racc" x="292" y="18" width="180" height="62" rx="4"/>
+        <text class="nome" x="308" y="45">Il raccoglitore</text>
+        <text class="etichetta" x="308" y="63">cam_collector.py · porta 4318</text>
+
+        <!-- archivio -->
+        <rect class="scatola b-racc" x="292" y="140" width="180" height="62" rx="4"/>
+        <text class="nome" x="308" y="167">L'archivio</text>
+        <text class="etichetta" x="308" y="185">cam-team.db (SQLite)</text>
+
+        <!-- console -->
+        <rect class="scatola forte b-console" x="560" y="140" width="152" height="62" rx="4"/>
+        <text class="nome" x="576" y="167">La console</text>
+        <text class="etichetta" x="576" y="185">cam_gui.py</text>
+
+        <!-- flussi -->
+        <path class="flusso" d="M 196 54 L 286 50" marker-end="url(#freccia)"/>
+        <path class="flusso" d="M 382 82 L 382 136" marker-end="url(#freccia)"/>
+        <path class="flusso" d="M 554 171 L 478 171" marker-end="url(#freccia)"/>
+        <text class="glossa" x="198" y="34">HTTP, solo in uscita</text>
+        <text class="glossa" x="392" y="115">scrive</text>
+        <text class="glossa" x="470" y="200" text-anchor="end">legge il file, non la rete</text>
+      </svg>
+      <figcaption>La freccia che conta è l'ultima: <strong>la console apre l'archivio come file</strong>,
+      non parla col raccoglitore via rete. Perciò console e raccoglitore stanno bene sulla stessa
+      macchina — ed è il motivo per cui spostare il raccoglitore su un VPS le toglie la scheda Persone.</figcaption>
+    </figure>
+
+    <div class="tabella-cont">
+      <table>
+        <thead>
+          <tr><th>Ruolo</th><th>Che cosa gira</th><th>Su quale macchina</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="macchina m-racc">raccoglitore</span></td>
+            <td><code>cam_collector.py</code></td>
+            <td>Una sola, accesa quando il team lavora. Nel caso tipico: <strong>il PC dell'amministratore</strong>.</td>
+          </tr>
+          <tr>
+            <td><span class="macchina m-console">console</span></td>
+            <td><code>cam_gui.py</code>, <code>cam.py</code></td>
+            <td>Il PC dell'amministratore. Deve poter <strong>aprire il file</strong> dell'archivio.</td>
+          </tr>
+          <tr>
+            <td><span class="macchina m-post">postazione</span></td>
+            <td><code>cam_agent.py</code> + <code>cam.py</code></td>
+            <td>Ogni sviluppatore. Non apre porte, parla solo in uscita.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Questo runbook assume il caso più semplice e più solido: <strong>raccoglitore e console
+    sulla stessa macchina</strong>, quella dell'amministratore. Se il raccoglitore deve stare
+    altrove, la variante è <a href="#altrove">in fondo</a>.</p>
+  </section>
+
+  <section id="decisioni">
+    <h2>Due decisioni da prendere prima</h2>
+    <p class="sotto-titolo">Cambiarle dopo si può, ma la seconda riscrive quello che è già in archivio.</p>
+
+    <h3>Quanto dettaglio sulle persone</h3>
+    <p>La telemetria di Claude Code manda <code>user.email</code> in chiaro, sempre, e nessuna
+    impostazione sulla postazione lo toglie. Il livello si impone quindi <strong>nel raccoglitore</strong>,
+    nel momento in cui il dato viene scritto — che è anche l'unico punto verificabile e l'unico
+    sotto il tuo controllo invece che di ogni singola macchina.</p>
+
+    <div class="tabella-cont">
+      <table>
+        <thead><tr><th><code>--privacy</code></th><th>Cosa finisce in archivio</th><th>Cosa resta possibile</th></tr></thead>
+        <tbody>
+          <tr><td><code>aggregato</code></td><td>nessun identificativo di persona</td><td>costo per modello, resa complessiva, peso della cache</td></tr>
+          <tr><td><code>pseudonimo</code> <span style="color:var(--inchiostro-tenue)">(predefinito)</span></td><td>un codice stabile a chiave, non l'indirizzo</td><td>anche postazioni ferme e saturazione dei limiti</td></tr>
+          <tr><td><code>nominativo</code></td><td>l'indirizzo di posta</td><td>attribuzione diretta</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Il testo delle richieste <strong>non esce mai</strong>: <code>OTEL_LOG_USER_PROMPTS</code>
+    resta a <code>0</code>, che è anche il valore predefinito. La configurazione generata al
+    passo 09 lo scrive comunque in modo esplicito, perché è la riga che si mostra a chi chiede.</p>
+
+    <h3>Quante postazioni stai pagando</h3>
+    <p>Va <strong>dichiarato</strong>, perché le postazioni dormienti sono invisibili alla
+    telemetria: chi non usa lo strumento non manda niente e non compare da nessuna parte. Senza
+    quel numero la domanda che conta — <em>quante licenze pago a vuoto</em> — non ha risposta.
+    Serve al passo 08.</p>
+  </section>
+
+  <section id="raccoglitore">
+    <h2>Il raccoglitore</h2>
+    <p class="sotto-titolo">Passi 01–06, tutti sul PC dell'amministratore.</p>
+
+    <ol class="passi">
+
+      <li class="passo"><div class="corpo">
+        <h3>Genera il token condiviso</h3>
+        <p>Aprire alla rete senza token è come lasciare l'archivio scrivibile da chiunque sia in
+        rete. Il raccoglitore avverte all'avvio, ma non impedisce.</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-racc">raccoglitore</span>
+            <span class="comando-dove">PowerShell, nella cartella di CAM</span></div>
+<pre><code>python -c "import secrets; print(secrets.token_urlsafe(24))"</code></pre>
+        </div>
+        <div class="nota rischio">
+          <span class="nota-titolo">Prima di distribuirlo, sappi cosa distribuisci</span>
+          <p><strong>Il token è uno solo, e vale in lettura come in scrittura.</strong> Lo stesso
+          token che dai a ogni postazione per mandare i dati apre anche il cruscotto, dove si vede
+          quanto consuma ogni collega. Non è un dettaglio tecnico: o lo accetti, o il cruscotto
+          non va esposto alla rete. Token separati per lettura e scrittura sono nel backlog
+          (PF14) e oggi non ci sono.</p>
+        </div>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Prepara due cartelle, non una</h3>
+        <p>L'archivio e la chiave degli pseudonimi vanno in <strong>posti diversi, con permessi
+        diversi</strong>: chi ha l'archivio non deve poter risalire alle persone. È tutto il senso
+        del livello intermedio, e metterli nella stessa cartella lo annulla senza che nulla smetta
+        di funzionare — cioè senza che nessuno se ne accorga.</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-racc">raccoglitore</span>
+            <span class="comando-dove">PowerShell</span></div>
+<pre><code>New-Item -ItemType Directory -Force C:\claude-team
+New-Item -ItemType Directory -Force C:\claude-team\chiavi
+
+<span class="cm"># togli l'ereditarietà e lascia le chiavi al solo amministratore</span>
+icacls C:\claude-team\chiavi /inheritance:r
+icacls C:\claude-team\chiavi /grant:r "$env:USERNAME:(OI)(CI)F"</code></pre>
+        </div>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Avvialo una prima volta, a mano</h3>
+        <p><code>--host 0.0.0.0</code> significa «su tutte le interfacce». Non è un indirizzo a cui
+        collegarsi: le postazioni useranno il nome della macchina.</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-racc">raccoglitore</span>
+            <span class="comando-dove">PowerShell — lascia la finestra aperta</span></div>
+<pre><code>python cam_collector.py --host 0.0.0.0 --port 4318 --token IL-TOKEN `
+    --privacy pseudonimo `
+    --db  C:\claude-team\cam-team.db `
+    --key C:\claude-team\chiavi\cam-pseudonimi.key</code></pre>
+        </div>
+        <div class="nota rischio">
+          <span class="nota-titolo">Non c'è TLS</span>
+          <p>Il raccoglitore parla <strong>HTTP in chiaro</strong>: in tutto il modulo non compare
+          <code>ssl</code>. Su una rete aziendale è una scelta difendibile. Su un indirizzo
+          raggiungibile da Internet no — passerebbero in chiaro i percorsi dei progetti, i costi,
+          gli indirizzi e il token stesso a ogni richiesta.</p>
+        </div>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Apri la porta, solo sul profilo di dominio</h3>
+        <p>Non è un servizio da esporre altrove.</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-racc">raccoglitore</span>
+            <span class="comando-dove">PowerShell <strong>come amministratore</strong></span></div>
+<pre><code>New-NetFirewallRule -DisplayName 'cam-collector' -Direction Inbound `
+    -Protocol TCP -LocalPort 4318 -Action Allow -Profile Domain</code></pre>
+        </div>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Verifica da un'altra macchina, adesso</h3>
+        <p>Prima di andare a configurare dieci postazioni, non dopo.</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-post">da una postazione</span>
+            <span class="comando-dove">sostituisci il nome della macchina</span></div>
+<pre><code>curl "http://NOME-DEL-PC-ADMIN:4318/healthz?token=IL-TOKEN"</code></pre>
+        </div>
+        <p>Se non risponde, il problema è la rete o il firewall. Il token nell'indirizzo serve
+        perché un browser non manda intestazioni — ed è anche il modo in cui aprirai il cruscotto:
+        <code>http://NOME-DEL-PC-ADMIN:4318/?token=IL-TOKEN</code></p>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Fallo ripartire da solo</h3>
+        <p>Questo passo non è facoltativo, ed è il motivo:
+        <strong>un raccoglitore fermo non lascia traccia</strong>. L'esportatore di Claude Code
+        ritenta per poco e poi lascia perdere, e quell'intervallo <em>non si recupera più</em>.
+        L'agente invece l'arretrato lo ricalcola — ma l'agente copre le sessioni, non la telemetria.</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-racc">raccoglitore</span>
+            <span class="comando-dove">stampa il comando già compilato, non lo esegue</span></div>
+<pre><code>python cam_collector.py --setup-service --host 0.0.0.0 --port 4318 `
+    --privacy pseudonimo --db C:\claude-team\cam-team.db</code></pre>
+        </div>
+        <p>Stampa tre versioni: collegamento in Esecuzione automatica, attività pianificata e unità
+        systemd. Per una macchina di servizio scegli l'<strong>attività pianificata</strong>, che
+        parte anche senza che nessuno faccia l'accesso. Ricordati di aggiungere <code>--token</code>
+        e <code>--key</code> agli argomenti: <code>--setup-service</code> ripete quello che gli
+        passi, e quei due non glieli hai passati.</p>
+      </div></li>
+
+    </ol>
+  </section>
+
+  <section id="console">
+    <h2>La console</h2>
+    <p class="sotto-titolo">Passi 07–08, sulla stessa macchina.</p>
+
+    <ol class="passi" start="7" style="counter-reset: p 6;">
+
+      <li class="passo"><div class="corpo">
+        <h3>Dì alla console dove sta l'archivio</h3>
+        <p>La console cerca <code>cam-team.db</code> accanto a sé stessa; tu l'hai messo in
+        <code>C:\claude-team</code>, quindi va indicato. In <code>config.json</code>:</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-console">console</span>
+            <span class="comando-dove">config.json — le barre rovesciate vanno raddoppiate</span></div>
+<pre><code>"team": {
+  "seats": 8,
+  "fee_per_seat": 122.0,
+  "currency": "EUR",
+  "db": "C:\\claude-team\\cam-team.db"
+}</code></pre>
+        </div>
+        <p><code>seats</code> è il numero di postazioni <strong>pagate</strong>, quello deciso
+        sopra. Lasciarlo a <code>0</code> spegne le colonne di spesa e mostra solo il consumo:
+        funziona, ma non risponde alla domanda per cui hai attivato tutto questo.</p>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Aprila</h3>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-console">console</span>
+            <span class="comando-dove">PowerShell</span></div>
+<pre><code>python cam_gui.py</code></pre>
+        </div>
+        <p>La scheda <strong>Persone</strong> è quella nuova. Sarà vuota finché non arriva la prima
+        postazione: è il passo che segue.</p>
+        <div class="nota info">
+          <span class="nota-titolo">Facoltativo, ma è quello che si usa ogni giorno</span>
+          <p><code>python install_statusline.py</code> aggiunge costo, tempo attivo e saturazione
+          dei limiti alla statusline di Claude Code. Con <code>--wrap</code> conserva la statusline
+          che hai già invece di sostituirla.</p>
+        </div>
+      </div></li>
+
+    </ol>
+  </section>
+
+  <section id="postazioni">
+    <h2>Ogni postazione</h2>
+    <p class="sotto-titolo">Passi 09–12. Cinque minuti a persona, e sono <strong>due cose distinte</strong>:
+    la telemetria la manda Claude Code da sé, lo storico lo recupera l'agente.</p>
+
+    <ol class="passi" start="9" style="counter-reset: p 8;">
+
+      <li class="passo"><div class="corpo">
+        <h3>Genera il blocco di configurazione</h3>
+        <p>Si genera <strong>sul raccoglitore</strong>, con lo stesso token: altrimenti stampa una
+        configurazione che verrà rifiutata.</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-racc">raccoglitore</span>
+            <span class="comando-dove">stampa il blocco da distribuire</span></div>
+<pre><code>python cam_collector.py --setup --host NOME-DEL-PC-ADMIN --token IL-TOKEN</code></pre>
+        </div>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Applicalo — meglio una volta sola che dieci</h3>
+        <p>Il blocco <code>env</code> può andare nel <code>~/.claude/settings.json</code> di
+        ciascuno, ma per un team conviene il file centralizzato non modificabile dall'utente, così
+        la configurazione non dipende dalla buona volontà di ognuno.</p>
+        <div class="tabella-cont">
+          <table>
+            <thead><tr><th>Sistema</th><th><code>managed-settings.json</code></th></tr></thead>
+            <tbody>
+              <tr><td>Windows</td><td><code>C:\Program Files\ClaudeCode\managed-settings.json</code></td></tr>
+              <tr><td>macOS</td><td><code>/Library/Application Support/ClaudeCode/managed-settings.json</code></td></tr>
+              <tr><td>Linux</td><td><code>/etc/claude-code/managed-settings.json</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="nota rischio">
+          <span class="nota-titolo">Il passo che tutti dimenticano</span>
+          <p><strong>Riavvia Claude Code.</strong> Le variabili si leggono all'avvio. Senza riavvio
+          non arriva niente, e non c'è nessun messaggio di errore da nessuna parte a dirtelo.</p>
+        </div>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Metti i due file e prova a vuoto</h3>
+        <p>Sulla postazione servono <strong>due file soli</strong>: <code>cam.py</code> e
+        <code>cam_agent.py</code>. Nessuna dipendenza, e <code>config.json</code> non è
+        obbligatorio. Va bene una cartella di rete in sola lettura o un clone del repository.</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-post">postazione</span>
+            <span class="comando-dove">calcola e mostra, senza spedire niente</span></div>
+<pre><code>python cam_agent.py --endpoint http://NOME-DEL-PC-ADMIN:4318 --token IL-TOKEN --dry-run</code></pre>
+        </div>
+        <p>Se il numero che stampa è plausibile, manda davvero una volta con <code>--once</code>.
+        In alternativa a <code>--endpoint</code> e <code>--token</code> si possono usare le
+        variabili d'ambiente <code>CAM_ENDPOINT</code> e <code>CAM_TOKEN</code>.</p>
+        <div class="nota info">
+          <span class="nota-titolo">Perché l'agente esiste</span>
+          <p>La telemetria parte dal giorno in cui la accendi. Sulla macchina di sviluppo, il
+          giorno dell'accensione, copriva lo <strong>0,00%</strong> del consumo totale: $0.10
+          contro $2.958,85 già sul disco nei transcript. L'agente rilegge i transcript e manda la
+          differenza rispetto a quanto già spedito.</p>
+        </div>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Fallo ripartire a ogni accesso</h3>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-post">postazione</span>
+            <span class="comando-dove">stampa il comando, non lo esegue</span></div>
+<pre><code>python cam_agent.py --setup-service</code></pre>
+        </div>
+        <p>Poi resta acceso e rispedisce ogni 15 minuti. Non apre porte e non resta in ascolto:
+        parla solo lui, verso il raccoglitore. Funziona identico in sede, in VPN e su un portatile
+        fuori rete.</p>
+      </div></li>
+
+    </ol>
+  </section>
+
+  <section id="dopo">
+    <h2>Il giorno dopo, e ogni mese</h2>
+    <p class="sotto-titolo">Quattro comandi che coprono la manutenzione ordinaria.</p>
+
+    <div class="comando">
+      <div class="comando-testa"><span class="macchina m-racc">raccoglitore</span>
+        <span class="comando-dove">sta funzionando? chi manda, chi è fermo</span></div>
+<pre><code>python cam_collector.py --status</code></pre>
+    </div>
+
+    <div class="comando">
+      <div class="comando-testa"><span class="macchina m-racc">raccoglitore</span>
+        <span class="comando-dove">il riepilogo da portare in riunione</span></div>
+<pre><code>python cam_collector.py --relazione relazione-agosto.md</code></pre>
+    </div>
+
+    <div class="comando">
+      <div class="comando-testa"><span class="macchina m-racc">raccoglitore</span>
+        <span class="comando-dove">la fatturazione vera, contro quello che misuriamo</span></div>
+<pre><code>python cam_collector.py --import-csv export-console.csv
+python cam_collector.py --riconcilia</code></pre>
+    </div>
+
+    <div class="comando">
+      <div class="comando-testa"><span class="macchina m-racc">raccoglitore</span>
+        <span class="comando-dove">quando qualcuno chiede di essere cancellato</span></div>
+<pre><code>python cam_collector.py --dimentica nome.cognome@azienda.it</code></pre>
+    </div>
+
+    <div class="nota prova">
+      <span class="nota-titolo">Quando qualcuno lascia il team</span>
+      <p>Vanno tolte <strong>tre</strong> cose, e dimenticarne una lascia una postazione che manda
+      dati senza che nessuno la stia guardando: la voce <code>OTEL_EXPORTER_OTLP_ENDPOINT</code>
+      dal suo <code>settings.json</code>, il blocco <code>env</code>, e il collegamento
+      dell'agente. I dati già in archivio <em>restano</em>, ed è voluto: sono la spesa dei mesi che
+      hai pagato davvero. Per toglierli anche quelli serve <code>--dimentica</code>.</p>
+    </div>
+  </section>
+
+  <section id="altrove">
+    <h2>Se il raccoglitore non può stare qui</h2>
+    <p class="sotto-titolo">Il caso dei portatili che lavorano fuori sede.</p>
+
+    <p>È una domanda legittima, e la risposta ovvia — un VPS con la porta aperta su Internet —
+    oggi <strong>non si può dare</strong>. Tre ragioni, in ordine di gravità:</p>
+
+    <ul class="punti">
+      <li><strong>Non c'è TLS.</strong> Tutto passerebbe in chiaro su Internet, token compreso, a
+      ogni richiesta.</li>
+      <li><strong>Il token è uno solo</strong> e vale in lettura come in scrittura: quello dato
+      alle postazioni apre anche il cruscotto di tutti.</li>
+      <li><strong>Il livello «pseudonimo» si annullerebbe da solo.</strong> La regola è che la
+      chiave stia separata dall'archivio, con permessi diversi. Su un server affittato finiscono
+      sullo stesso disco, sotto lo stesso root, dentro gli stessi snapshot del fornitore.</li>
+    </ul>
+
+    <p>E una conseguenza pratica che si sente subito: la console <strong>legge l'archivio come
+    file</strong>. Col raccoglitore su un VPS la scheda Persone non ha più niente da aprire, e
+    ti resterebbe il cruscotto web — che è un'altra interfaccia, non la tua.</p>
+
+    <div class="nota prova">
+      <span class="nota-titolo">La strada che non richiede di scrivere codice</span>
+      <p>Una <strong>rete privata</strong> (WireGuard, Tailscale) fra postazioni e VPS, col
+      raccoglitore in ascolto <em>solo</em> sull'indirizzo dell'overlay e mai su
+      <code>0.0.0.0</code>. Il VPS resta fuori sede per raggiungibilità — che è quello che serve ai
+      portatili — ma il raccoglitore non è mai su Internet: HTTP in chiaro torna difendibile, e la
+      console ritrova il suo file, perché sull'overlay il VPS è una macchina di rete come le altre.
+      È <strong>PF14</strong> nel backlog, e se questa strada funziona si chiude senza una riga di
+      codice.</p>
+    </div>
+  </section>
+
+  <p class="chiusura">
+    Comandi e percorsi verificati contro <code>--help</code>, il README e il codice del
+    raccoglitore il 13 agosto 2026. Il raccoglitore è provato su Windows e su Linux
+    (Ubuntu 22.04, Python 3.10): 491 prove verdi su entrambi.
+  </p>
+
+</div>
+</body>
+</html>

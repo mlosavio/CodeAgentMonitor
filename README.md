@@ -706,11 +706,16 @@ telemetria e l'agente su **ognuna** delle altre. Le due sezioni che seguono sono
 completa, nell'ordine in cui va fatta — prima il raccoglitore, perché è l'indirizzo che serve
 alle postazioni.
 
-> **Le postazioni non sono tutte sulla stessa rete?** Allora questa procedura non basta: apre la
-> porta in chiaro e dà a ogni postazione un token che apre anche il cruscotto. Per case, uffici
-> diversi e gente in viaggio — e per il caso in cui **il pannello lo deve vedere solo
-> l'amministratore** — c'è la guida a parte:
-> **[Attivare CAM in un team distribuito geograficamente](docs/team-distribuito.md)**.
+Le due guide complete, passo per passo, stanno in [`docs/`](docs/):
+
+| | Quando |
+|---|---|
+| **[Attivare CAM nel team, in sede](docs/team-in-sede.md)** | tutte le postazioni sulla stessa rete aziendale |
+| **[Attivare CAM in un team distribuito](docs/team-distribuito.md)** | case, uffici diversi, gente in viaggio — e il pannello riservato a un amministratore |
+
+> **Le postazioni non sono tutte sulla stessa rete?** Allora la procedura qui sotto non basta:
+> apre la porta in chiaro e dà a ogni postazione un token che apre anche il cruscotto. Vai
+> direttamente alla seconda guida.
 
 ### Attivarlo, parte prima: la macchina che raccoglie
 

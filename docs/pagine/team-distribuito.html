@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAM per un team distribuito</title>
+<style>
+/* azzeramento minimo, come quello che l'ambiente di pubblicazione aggiunge da se' */
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; }
+</style>
+</head>
+<body>
+<style>
+  /* ---- Stessa palette della guida in sede: inchiostro da registro ------ */
+  :root {
+    --carta:      #F5F6F8;
+    --carta-alta: #FFFFFF;
+    --carta-cava: #ECEEF2;
+    --inchiostro: #16202B;
+    --inchiostro-fioco: #4A5766;
+    --inchiostro-tenue: #6E7B8A;
+    --filo:       #D3D9E1;
+    --filo-forte: #B7C0CC;
+    --timbro:     #2B5C8A;
+    --segnale:    #A83E26;
+    --verificato: #35674D;
+    --evidenza:   rgba(43, 92, 138, 0.09);
+    --allarme-fondo: rgba(168, 62, 38, 0.07);
+    --ok-fondo:      rgba(53, 103, 77, 0.08);
+    --ombra: 0 1px 2px rgba(22, 32, 43, .05), 0 6px 18px -10px rgba(22, 32, 43, .22);
+
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", "DejaVu Sans Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --carta:      #131A22;
+      --carta-alta: #1A222C;
+      --carta-cava: #0E141A;
+      --inchiostro: #DDE4EC;
+      --inchiostro-fioco: #A3AEBC;
+      --inchiostro-tenue: #7C8899;
+      --filo:       #2A343F;
+      --filo-forte: #3B4753;
+      --timbro:     #7FB2DE;
+      --segnale:    #E0805F;
+      --verificato: #7EB496;
+      --evidenza:   rgba(127, 178, 222, 0.12);
+      --allarme-fondo: rgba(224, 128, 95, 0.10);
+      --ok-fondo:      rgba(126, 180, 150, 0.10);
+      --ombra: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px -12px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --carta:      #131A22;
+    --carta-alta: #1A222C;
+    --carta-cava: #0E141A;
+    --inchiostro: #DDE4EC;
+    --inchiostro-fioco: #A3AEBC;
+    --inchiostro-tenue: #7C8899;
+    --filo:       #2A343F;
+    --filo-forte: #3B4753;
+    --timbro:     #7FB2DE;
+    --segnale:    #E0805F;
+    --verificato: #7EB496;
+    --evidenza:   rgba(127, 178, 222, 0.12);
+    --allarme-fondo: rgba(224, 128, 95, 0.10);
+    --ok-fondo:      rgba(126, 180, 150, 0.10);
+    --ombra: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px -12px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--carta); color: var(--inchiostro);
+    font-family: var(--sans); font-size: 16.5px; line-height: 1.62;
+    margin: 0; padding: 0 1.25rem 6rem; -webkit-font-smoothing: antialiased;
+  }
+  .foglio { max-width: 54rem; margin: 0 auto; }
+
+  .testata {
+    display: flex; flex-direction: column; gap: .9rem;
+    padding: 3.2rem 0 1.6rem; border-bottom: 2px solid var(--inchiostro);
+  }
+  .occhiello {
+    font-family: var(--mono); font-size: .72rem; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--inchiostro-tenue);
+  }
+  h1 {
+    font-family: var(--serif); font-size: clamp(2.05rem, 5.2vw, 2.95rem);
+    line-height: 1.08; font-weight: 600; margin: 0;
+    letter-spacing: -.015em; text-wrap: balance;
+  }
+  .sommario { font-size: 1.09rem; color: var(--inchiostro-fioco); max-width: 46rem; margin: 0; }
+
+  section { padding-top: 3.2rem; }
+  h2 {
+    font-family: var(--serif); font-size: 1.72rem; line-height: 1.2;
+    font-weight: 600; margin: 0 0 .35rem; letter-spacing: -.01em; text-wrap: balance;
+  }
+  h3 { font-size: 1.03rem; font-weight: 650; margin: 2.1rem 0 .5rem; letter-spacing: -.005em; }
+  .sotto-titolo { color: var(--inchiostro-tenue); font-size: .95rem; margin: 0 0 1.5rem; }
+  p { margin: 0 0 1rem; max-width: 44rem; }
+  a { color: var(--timbro); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, input:focus-visible {
+    outline: 2px solid var(--timbro); outline-offset: 3px; border-radius: 2px;
+  }
+  strong { font-weight: 650; }
+  code {
+    font-family: var(--mono); font-size: .88em; background: var(--carta-cava);
+    border: 1px solid var(--filo); padding: .06em .34em; border-radius: 3px;
+  }
+
+  /* ---- Chip di macchina ------------------------------------------------ */
+  .macchina {
+    display: inline-flex; align-items: center; gap: .42rem;
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .09em;
+    text-transform: uppercase; padding: .2rem .5rem .22rem;
+    border-radius: 3px; border: 1px solid currentColor; white-space: nowrap;
+  }
+  .m-host  { color: var(--timbro); }
+  .m-post  { color: var(--segnale); }
+  .m-admin { color: var(--verificato); }
+
+  /* ---- Diagramma ------------------------------------------------------- */
+  .schema {
+    margin: 2rem 0 0; padding: 1.5rem 1.2rem 1.1rem;
+    background: var(--carta-alta); border: 1px solid var(--filo);
+    border-radius: 6px; box-shadow: var(--ombra); overflow-x: auto;
+  }
+  .schema svg { display: block; min-width: 34rem; width: 100%; height: auto; }
+  .schema svg text { font-family: var(--sans); font-size: 13px; fill: var(--inchiostro); }
+  .schema svg .nome { font-weight: 650; }
+  .schema svg .etichetta { font-size: 11.5px; fill: var(--inchiostro-tenue); }
+  .schema svg .glossa { font-size: 11px; fill: var(--inchiostro-tenue); }
+  .schema svg .mono { font-family: var(--mono); font-size: 11.5px; }
+  .schema svg .scatola { fill: var(--carta-alta); stroke-width: 1.5px; }
+  .schema svg .scatola.forte { stroke-width: 1.8px; }
+  .schema svg .involucro { fill: none; stroke-width: 1.3px; stroke-dasharray: 5 4; }
+  .schema svg .b-post  { stroke: var(--segnale); }
+  .schema svg .b-host  { stroke: var(--timbro); }
+  .schema svg .b-admin { stroke: var(--verificato); }
+  .schema svg .passa   { stroke: var(--verificato); stroke-width: 1.6px; fill: none; }
+  .schema svg .blocca  { stroke: var(--segnale); stroke-width: 1.6px; fill: none; }
+  .schema svg .punta-ok { fill: var(--verificato); }
+  .schema svg .punta-no { fill: var(--segnale); }
+  .schema figcaption {
+    font-size: .85rem; color: var(--inchiostro-tenue);
+    margin-top: 1rem; padding-top: .8rem; border-top: 1px solid var(--filo);
+  }
+
+  /* ---- Passi ----------------------------------------------------------- */
+  .passi {
+    list-style: none; margin: 1.6rem 0 0; padding: 0;
+    display: flex; flex-direction: column; gap: 2.1rem; counter-reset: p;
+  }
+  .passo { display: grid; grid-template-columns: 2.35rem 1fr; gap: 0 1rem; counter-increment: p; }
+  .passo::before {
+    content: counter(p, decimal-leading-zero);
+    font-family: var(--mono); font-size: .78rem; font-variant-numeric: tabular-nums;
+    color: var(--inchiostro-tenue); padding-top: .28rem;
+    border-top: 2px solid var(--filo-forte); align-self: start;
+  }
+  .passo > .corpo { min-width: 0; }
+  .passo h3 { margin-top: 0; }
+  .passo p:last-child { margin-bottom: 0; }
+
+  /* ---- Comandi --------------------------------------------------------- */
+  .comando { margin: .9rem 0 1rem; }
+  .comando-testa { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .45rem; }
+  .comando-dove { font-size: .82rem; color: var(--inchiostro-tenue); }
+  pre {
+    margin: 0; padding: .95rem 1.05rem; background: var(--carta-cava);
+    border: 1px solid var(--filo); border-left: 3px solid var(--filo-forte);
+    border-radius: 4px; overflow-x: auto; font-family: var(--mono);
+    font-size: .845rem; line-height: 1.62; color: var(--inchiostro);
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+  .cm { color: var(--inchiostro-tenue); }
+  .ok-tok { color: var(--verificato); font-weight: 600; }
+  .no-tok { color: var(--segnale); font-weight: 600; }
+
+  /* ---- Riquadri -------------------------------------------------------- */
+  .nota {
+    margin: 1.4rem 0; padding: 1rem 1.15rem; border: 1px solid var(--filo);
+    border-radius: 5px; background: var(--carta-alta); font-size: .955rem;
+  }
+  .nota > :last-child { margin-bottom: 0; }
+  .nota-titolo {
+    display: block; font-size: .73rem; font-family: var(--mono);
+    letter-spacing: .11em; text-transform: uppercase; margin-bottom: .45rem;
+  }
+  .nota.rischio { background: var(--allarme-fondo); border-color: var(--segnale); }
+  .nota.rischio .nota-titolo { color: var(--segnale); }
+  .nota.prova { background: var(--ok-fondo); border-color: var(--verificato); }
+  .nota.prova .nota-titolo { color: var(--verificato); }
+  .nota.info { background: var(--evidenza); border-color: var(--filo-forte); }
+  .nota.info .nota-titolo { color: var(--timbro); }
+
+  /* ---- Tabelle --------------------------------------------------------- */
+  .tabella-cont { overflow-x: auto; margin: 1.3rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .93rem; min-width: 27rem; }
+  th, td { text-align: left; padding: .6rem .8rem .6rem 0; border-bottom: 1px solid var(--filo); vertical-align: top; }
+  th {
+    font-size: .72rem; font-family: var(--mono); letter-spacing: .09em;
+    text-transform: uppercase; color: var(--inchiostro-tenue);
+    border-bottom: 1px solid var(--filo-forte); white-space: nowrap;
+  }
+  .si { color: var(--verificato); font-weight: 650; }
+  .no { color: var(--segnale); font-weight: 650; }
+
+  ul.punti { margin: 1rem 0; padding-left: 1.15rem; max-width: 44rem; }
+  ul.punti li { margin-bottom: .55rem; }
+  ul.punti li::marker { color: var(--inchiostro-tenue); }
+
+  /* ---- Topologie ------------------------------------------------------- */
+  .topologie { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); margin: 1.5rem 0; }
+  .topologia { padding: 1.1rem 1.2rem; border: 1px solid var(--filo); border-radius: 6px; background: var(--carta-alta); }
+  .topologia.scelta { border-color: var(--timbro); box-shadow: var(--ombra); }
+  .topologia h4 { margin: 0 0 .1rem; font-size: 1.02rem; font-weight: 650; }
+  .topologia .lettera {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--inchiostro-tenue); display: block; margin-bottom: .3rem;
+  }
+  .topologia p { font-size: .92rem; margin: .55rem 0 0; }
+  .pro::before  { content: "+ "; color: var(--verificato); font-weight: 700; }
+  .contro::before { content: "− "; color: var(--segnale); font-weight: 700; }
+
+  /* ---- Elenco di controllo -------------------------------------------- */
+  .controllo { list-style: none; margin: 1.4rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .1rem; }
+  .controllo li { border-bottom: 1px solid var(--filo); }
+  .controllo label {
+    display: flex; gap: .75rem; align-items: flex-start;
+    padding: .62rem .3rem; cursor: pointer; font-size: .95rem;
+  }
+  .controllo input { margin: .35rem 0 0; accent-color: var(--timbro); flex: none; width: 1rem; height: 1rem; }
+  .controllo input:checked + span { color: var(--inchiostro-tenue); text-decoration: line-through; }
+
+  .chiusura {
+    margin-top: 3.5rem; padding-top: 1.4rem; border-top: 1px solid var(--filo);
+    font-size: .88rem; color: var(--inchiostro-tenue);
+  }
+  @media (max-width: 34rem) {
+    .passo { grid-template-columns: 1fr; gap: .5rem; }
+    .passo::before { border-top: 0; padding-top: 0; }
+  }
+</style>
+
+<div class="foglio">
+
+  <header class="testata">
+    <div class="occhiello">CodeAgentMonitor · runbook</div>
+    <h1>CAM per un team distribuito</h1>
+    <p class="sommario">Postazioni sparse fra case, uffici diversi e paesi diversi — e un pannello
+    di controllo che deve vedere <strong>solo l'amministratore</strong>. Ogni comando porta scritto
+    su quale macchina si esegue.</p>
+  </header>
+
+  <section id="perche">
+    <h2>Perché non basta la procedura in sede</h2>
+    <p class="sotto-titolo">Quattro punti in cui l'installazione documentata nel README non regge fuori dalla LAN.</p>
+
+    <div class="tabella-cont">
+      <table>
+        <thead><tr><th>Nella procedura in sede</th><th>Perché non basta qui</th></tr></thead>
+        <tbody>
+          <tr><td><code>--host 0.0.0.0</code> sulla 4318</td><td>esporrebbe il raccoglitore <strong>in chiaro su Internet</strong></td></tr>
+          <tr><td>Firewall <code>-Profile Domain</code></td><td>il profilo di dominio non esiste per chi lavora da casa</td></tr>
+          <tr><td>«il token serve agli invii»</td><td>è <strong>uno solo e apre anche il cruscotto</strong> — contro il requisito</td></tr>
+          <tr><td>Il pannello legge <code>cam-team.db</code> come file</td><td>l'amministratore non ce l'ha, se il raccoglitore sta altrove</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Il resto — agente, telemetria, riservatezza, riconciliazione — funziona identico. L'agente
+    in particolare <strong>parla solo in uscita</strong> e non apre porte: da questo lato una
+    postazione a casa è uguale a una in ufficio.</p>
+  </section>
+
+  <section id="vincolo">
+    <h2>Il vincolo che decide tutto</h2>
+    <p class="sotto-titolo">Il codice non sa distinguere chi legge da chi scrive. Le sue rotte sì.</p>
+
+    <p><code>_autorizzato()</code> non guarda la rotta: lo stesso token che dài a una postazione
+    per scrivere le permette anche di aprire il cruscotto di tutti. Ma <strong>le rotte sono già
+    separate</strong> — mancava solo qualcuno che lo dicesse.</p>
+
+    <div class="tabella-cont">
+      <table>
+        <thead><tr><th></th><th>Rotte</th><th>Chi deve poterle usare</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Scrittura</strong></td><td><code>POST /v1/sessions</code> · <code>/v1/metrics</code></td><td>ogni postazione, da ovunque</td></tr>
+          <tr><td><strong>Lettura</strong></td><td><code>GET /</code> · <code>/api/summary</code> · <code>/api/team</code></td><td><strong>solo l'amministratore</strong></td></tr>
+          <tr><td>Diagnostica</td><td><code>GET /healthz</code></td><td>solo l'amministratore</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <figure class="schema">
+      <svg viewBox="0 0 740 300" role="img" aria-label="Le postazioni raggiungono solo le rotte di scrittura attraverso il proxy; le rotte di lettura sono bloccate per tutti tranne l'amministratore.">
+        <defs>
+          <marker id="ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path class="punta-ok" d="M 0 0 L 10 5 L 0 10 z"/>
+          </marker>
+          <marker id="no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path class="punta-no" d="M 0 0 L 10 5 L 0 10 z"/>
+          </marker>
+        </defs>
+
+        <rect class="involucro b-host" x="322" y="8" width="404" height="284" rx="6"/>
+        <text class="glossa" x="336" y="26">l'host — il raccoglitore non è mai raggiungibile da fuori</text>
+
+        <rect class="scatola b-post" x="8" y="52" width="150" height="50" rx="4"/>
+        <text class="nome" x="22" y="74">Postazioni</text>
+        <text class="etichetta" x="22" y="91">ovunque nel mondo</text>
+
+        <rect class="scatola b-admin" x="8" y="196" width="150" height="50" rx="4"/>
+        <text class="nome" x="22" y="218">Amministratore</text>
+        <text class="etichetta" x="22" y="235">basic auth + token</text>
+
+        <rect class="scatola forte b-host" x="342" y="96" width="126" height="106" rx="4"/>
+        <text class="nome" x="356" y="128">Proxy</text>
+        <text class="etichetta" x="356" y="145">TLS sulla 443</text>
+        <text class="mono" x="356" y="170" fill="currentColor" style="fill:var(--verificato)">/v1/*  passa</text>
+        <text class="mono" x="356" y="188" style="fill:var(--segnale)">/  404</text>
+
+        <rect class="scatola b-host" x="556" y="120" width="158" height="58" rx="4"/>
+        <text class="nome" x="570" y="145">Raccoglitore</text>
+        <text class="etichetta" x="570" y="162">127.0.0.1:4318</text>
+
+        <path class="passa" d="M 164 74 L 336 112" marker-end="url(#ok)"/>
+        <text class="glossa" x="180" y="66">POST /v1/* col token</text>
+
+        <path class="blocca" d="M 164 92 L 336 140" marker-end="url(#no)"/>
+        <text class="glossa" x="186" y="112" style="fill:var(--segnale)">GET / → 404</text>
+
+        <path class="passa" d="M 164 220 L 336 186" marker-end="url(#ok)"/>
+        <text class="glossa" x="180" y="243">GET / con le credenziali</text>
+
+        <path class="passa" d="M 474 149 L 550 149" marker-end="url(#ok)"/>
+        <text class="glossa" x="482" y="140">in locale</text>
+      </svg>
+      <figcaption>La separazione si mette <strong>davanti</strong> al raccoglitore, non dentro.
+      Funziona oggi, senza toccare il codice — e resta valida quando i token separati arriveranno.
+      Aiuta che il cruscotto sia HTML servito dal server e non faccia chiamate <code>fetch</code>:
+      basta far passare <code>/</code> e il pannello funziona intero.</figcaption>
+    </figure>
+  </section>
+
+  <section id="topologie">
+    <h2>Due topologie, e quale scegliere</h2>
+
+    <div class="topologie">
+      <div class="topologia">
+        <span class="lettera">Topologia A</span>
+        <h4>Rete privata</h4>
+        <p>WireGuard o Tailscale. Il raccoglitore ascolta <strong>solo</strong> sull'indirizzo
+        dell'overlay e non è mai su Internet.</p>
+        <p class="pro">HTTP in chiaro torna difendibile: è già dentro un tunnel cifrato. L'admin
+        legge il file dell'archivio come se fosse in LAN.</p>
+        <p class="contro">Un client in più su ogni postazione, che in alcune aziende non è
+        consentito.</p>
+      </div>
+      <div class="topologia scelta">
+        <span class="lettera">Topologia B · descritta qui</span>
+        <h4>Host pubblico con reverse proxy</h4>
+        <p>Il raccoglitore ascolta su <code>127.0.0.1</code>, davanti un proxy che termina TLS
+        sulla 443.</p>
+        <p class="pro">Niente da installare sulle postazioni. La 443 in uscita non è bloccata da
+        nessuna rete e da nessun paese.</p>
+        <p class="contro">Un servizio pubblico da tenere aggiornato, e su hardware affittato la
+        chiave degli pseudonimi non è più al sicuro.</p>
+      </div>
+    </div>
+
+    <p>Se puoi installare un client VPN ovunque, <strong>A</strong> è più semplice e più sicura.
+    Se le postazioni sono sparse e non governi il loro software — il caso tipico — prendi
+    <strong>B</strong>. La combinazione è la scelta migliore delle tre: <strong>B per le
+    postazioni, A per l'amministratore</strong>.</p>
+  </section>
+
+  <section id="dove">
+    <h2>Dove mettere il raccoglitore</h2>
+    <p class="sotto-titolo">Tre requisiti, e un compromesso che non si risolve con la configurazione.</p>
+
+    <div class="nota rischio">
+      <span class="nota-titolo">Acceso sempre — e non è comodità</span>
+      <p><strong>Un raccoglitore fermo non lascia traccia.</strong> L'esportatore di Claude Code
+      ritenta per poco e poi lascia perdere, e quell'intervallo non si recupera più. Con un gruppo
+      su più fusi orari «di notte» non esiste: qualcuno sta lavorando. Quindi <strong>non il
+      portatile dell'amministratore</strong>.</p>
+    </div>
+
+    <p>Servono poi un indirizzo stabile con un nome DNS, per il certificato. E un disco di cui ti
+    fidi — qui sta l'unico compromesso serio.</p>
+
+    <p>La regola del livello <code>pseudonimo</code> è che la chiave stia in una cartella diversa
+    dall'archivio, con permessi diversi, così chi ha l'archivio non risale alle persone. Su una
+    macchina affittata <strong>entrambi stanno sullo stesso disco, sotto lo stesso root, dentro
+    gli stessi snapshot del fornitore</strong>. Non c'è configurazione che lo risolva.</p>
+
+    <div class="tabella-cont">
+      <table>
+        <thead><tr><th>Uscita</th><th>Cosa comporta</th></tr></thead>
+        <tbody>
+          <tr><td>Hardware tuo con nome pubblico</td><td>risolve tutto; richiede una sede con connettività stabile</td></tr>
+          <tr><td>VPS, accettando il rischio</td><td>va detto a chi è misurato: è un trattamento di dati personali fuori sede</td></tr>
+          <tr><td><code>--privacy aggregato</code></td><td>nessuna identità in archivio e la chiave non serve più — ma perdi la scheda Persone, cioè il motivo per cui lo stai installando</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="host">
+    <h2>L'host del raccoglitore</h2>
+    <p class="sotto-titolo">Passi 01–06. Esempi su Debian/Ubuntu, dove il raccoglitore è provato.</p>
+
+    <ol class="passi">
+
+      <li class="passo"><div class="corpo">
+        <h3>Il token condiviso</h3>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-host">host</span></div>
+<pre><code>python3 -c "import secrets; print(secrets.token_urlsafe(24))"</code></pre>
+        </div>
+        <p>Lo vedranno tutte le postazioni: è inevitabile, perché sta nel loro
+        <code>settings.json</code>.</p>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Due cartelle, non una</h3>
+        <p>Archivio e chiave <strong>separati, con permessi diversi</strong>.</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-host">host</span></div>
+<pre><code>sudo useradd --system --home /var/lib/cam --shell /usr/sbin/nologin cam
+sudo install -d -o cam -g cam -m 750 /var/lib/cam
+sudo install -d -o cam -g cam -m 700 /var/lib/cam/chiavi</code></pre>
+        </div>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Il raccoglitore, in ascolto solo in locale</h3>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-host">host</span>
+            <span class="comando-dove"><code>--host 127.0.0.1</code>, <strong>non</strong> <code>0.0.0.0</code></span></div>
+<pre><code>sudo -u cam python3 /opt/cam/cam_collector.py \
+    --host 127.0.0.1 --port 4318 \
+    --token IL-TOKEN \
+    --privacy pseudonimo \
+    --db  /var/lib/cam/cam-team.db \
+    --key /var/lib/cam/chiavi/cam-pseudonimi.key</code></pre>
+        </div>
+        <p>È il proxy a parlare col mondo. Se il raccoglitore fosse raggiungibile direttamente,
+        tutto il lavoro sulla separazione delle rotte si aggirerebbe collegandosi alla 4318.</p>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>In servizio, di sistema</h3>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-host">host</span>
+            <span class="comando-dove">stampa l'unità systemd, non la installa</span></div>
+<pre><code>python3 cam_collector.py --setup-service \
+    --host 127.0.0.1 --port 4318 --privacy pseudonimo --db /var/lib/cam/cam-team.db</code></pre>
+        </div>
+        <p>Aggiungi a mano <code>--token</code> e <code>--key</code>, che <code>--setup-service</code>
+        non ripete perché non glieli hai passati. Unità <strong>di sistema</strong>
+        (<code>/etc/systemd/system/</code>), non d'utente: deve partire senza che nessuno faccia
+        l'accesso.</p>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Il proxy: TLS, e la separazione fra chi scrive e chi legge</h3>
+        <p>Caddy prende il certificato da Let's Encrypt da solo e lo rinnova da solo. Genera prima
+        la password dell'amministratore con <code>caddy hash-password</code>.</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-host">host</span>
+            <span class="comando-dove">/etc/caddy/Caddyfile</span></div>
+<pre><code>cam.azienda.it {
+    encode gzip
+
+    <span class="cm"># --- Il pannello: solo l'amministratore ---------------</span>
+    <span class="cm"># Prima le rotte di lettura, perché "/" prenderebbe tutto.</span>
+    @pannello path / /api/summary /api/team /healthz
+    handle @pannello {
+        basic_auth {
+            admin $2a$14$METTI-QUI-L-HASH
+        }
+        reverse_proxy 127.0.0.1:4318
+    }
+
+    <span class="cm"># --- L'ingresso dati: le postazioni, da ovunque -------</span>
+    <span class="cm"># Qui NON va la basic auth: la credenziale è il token.</span>
+    handle /v1/* {
+        reverse_proxy 127.0.0.1:4318
+    }
+
+    handle { respond 404 }
+}</code></pre>
+        </div>
+        <p>Tre scelte da capire invece di copiare:</p>
+        <ul class="punti">
+          <li><strong><code>respond 404</code>, non 403.</strong> Un 403 dice «qui c'è qualcosa che
+          non puoi vedere». Un 404 non dice niente, ed è la risposta giusta per un pannello che non
+          deve risultare nemmeno esistente.</li>
+          <li><strong>La basic auth non copre <code>/v1/*</code>.</strong> Mettendola lì dovresti
+          distribuire anche quella password a ogni postazione, e torneresti ad avere una sola
+          credenziale per tutto — il problema da cui sei partito.</li>
+          <li><strong>Il token resta obbligatorio anche per l'amministratore.</strong> Il pannello
+          si apre con <code>?token=…</code> <em>dopo</em> la basic auth: due credenziali diverse
+          per due controlli diversi.</li>
+        </ul>
+        <div class="nota info">
+          <span class="nota-titolo">Se l'amministratore è mobile</span>
+          <p>Un elenco di IP consentiti stringe ancora di più, ma su un team distribuito l'admin è
+          spesso in viaggio quanto gli altri. La basic auth da sola è la scelta che non ti chiude
+          fuori.</p>
+        </div>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Verifica prima di toccare le postazioni</h3>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-host">host</span>
+            <span class="comando-dove">firewall: solo 80 e 443. La 4318 <strong>mai</strong></span></div>
+<pre><code><span class="cm"># le postazioni devono poter scrivere (405 = rotta viva: va bene)</span>
+curl -s -o /dev/null -w '%{http_code}\n' https://cam.azienda.it/v1/metrics
+
+<span class="cm"># il pannello NON deve rispondere senza credenziali → atteso 401</span>
+curl -s -o /dev/null -w '%{http_code}\n' https://cam.azienda.it/
+
+<span class="cm"># con le credenziali, sì</span>
+curl -s -u admin:password "https://cam.azienda.it/healthz?token=IL-TOKEN"
+
+<span class="cm"># e la 4318 non deve essere raggiungibile da fuori</span>
+curl -s --max-time 5 http://cam.azienda.it:4318/healthz   <span class="cm"># deve fallire</span></code></pre>
+        </div>
+        <p>Le ultime due righe sono le uniche che verificano davvero il requisito. Falle.</p>
+      </div></li>
+
+    </ol>
+  </section>
+
+  <section id="postazioni">
+    <h2>Ogni postazione, ovunque si trovi</h2>
+    <p class="sotto-titolo">Passi 07–09. Due cose distinte: la telemetria la manda Claude Code da sé, lo storico lo recupera l'agente.</p>
+
+    <ol class="passi" style="counter-reset: p 6;">
+
+      <li class="passo"><div class="corpo">
+        <h3>Genera il blocco di configurazione</h3>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-host">host</span>
+            <span class="comando-dove">indirizzo pubblico completo</span></div>
+<pre><code>python3 cam_collector.py --setup --host https://cam.azienda.it --token IL-TOKEN</code></pre>
+        </div>
+        <div class="nota info">
+          <span class="nota-titolo">Perché l'indirizzo va scritto per intero</span>
+          <p>Passando solo il nome otterresti <code>http://cam.azienda.it:4318</code>, cioè la
+          porta interna in chiaro: sbagliata da fuori. Un <code>--host</code> che è già un
+          indirizzo completo viene usato così com'è.</p>
+        </div>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>Applicalo, meglio una volta sola che dieci</h3>
+        <p>Il blocco <code>env</code> può andare nel <code>~/.claude/settings.json</code> di
+        ciascuno, ma per un team conviene il file centralizzato non modificabile dall'utente.</p>
+        <div class="tabella-cont">
+          <table>
+            <thead><tr><th>Sistema</th><th><code>managed-settings.json</code></th></tr></thead>
+            <tbody>
+              <tr><td>Windows</td><td><code>C:\Program Files\ClaudeCode\managed-settings.json</code></td></tr>
+              <tr><td>macOS</td><td><code>/Library/Application Support/ClaudeCode/managed-settings.json</code></td></tr>
+              <tr><td>Linux</td><td><code>/etc/claude-code/managed-settings.json</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="nota rischio">
+          <span class="nota-titolo">Il passo che si dimentica sempre</span>
+          <p><strong>Riavvia Claude Code.</strong> Le variabili si leggono all'avvio, e senza
+          riavvio non arriva niente <strong>senza nessun messaggio di errore da nessuna
+          parte</strong>.</p>
+        </div>
+      </div></li>
+
+      <li class="passo"><div class="corpo">
+        <h3>L'agente</h3>
+        <p>Sulla postazione servono <strong>due file soli</strong>: <code>cam.py</code> e
+        <code>cam_agent.py</code>. Nessuna dipendenza.</p>
+        <div class="comando">
+          <div class="comando-testa"><span class="macchina m-post">postazione</span></div>
+<pre><code>python cam_agent.py --endpoint https://cam.azienda.it --token IL-TOKEN --dry-run
+python cam_agent.py --endpoint https://cam.azienda.it --token IL-TOKEN --once
+python cam_agent.py --setup-service</code></pre>
+        </div>
+        <p>L'agente esiste perché <strong>la telemetria parte dal giorno in cui la accendi</strong>.
+        Sulla macchina di sviluppo, il giorno dell'accensione, copriva lo <strong>0,00%</strong> del
+        consumo totale: $0,10 contro $2.958,85 già sul disco nei transcript.</p>
+        <div class="nota prova">
+          <span class="nota-titolo">Una postazione fuori rete non è un caso speciale</span>
+          <p>L'agente parla <strong>solo in uscita</strong>, verso la 443. Funziona identico in
+          ufficio, a casa, in VPN, su una rete d'albergo e in aereo — quando torna online recupera
+          l'arretrato da sé. Non apre porte e non aggiunge superficie di attacco.</p>
+        </div>
+      </div></li>
+
+    </ol>
+  </section>
+
+  <section id="admin">
+    <h2>L'amministratore e il pannello</h2>
+    <p class="sotto-titolo">Due modi, e conviene averli entrambi.</p>
+
+    <h3>Il cruscotto web, da qualunque parte del mondo</h3>
+    <div class="comando">
+      <div class="comando-testa"><span class="macchina m-admin">amministratore</span>
+        <span class="comando-dove">dietro la basic auth</span></div>
+<pre><code>https://cam.azienda.it/?token=IL-TOKEN</code></pre>
+    </div>
+
+    <h3>Il pannello vero, con la scheda Persone</h3>
+    <p>La GUI <strong>legge <code>cam-team.db</code> come file</strong>, non via rete: non esiste
+    un modo di puntarla a un indirizzo HTTP. Per avere la scheda Persone completa — drill-down sui
+    progetti, riconciliazione, adozione mese per mese — serve una copia locale.</p>
+
+    <div class="comando">
+      <div class="comando-testa"><span class="macchina m-admin">amministratore</span>
+        <span class="comando-dove">con <code>.backup</code>, non con <code>cp</code></span></div>
+<pre><code>ssh cam@cam.azienda.it "sqlite3 /var/lib/cam/cam-team.db \"
+    .backup '/tmp/cam-snapshot.db'\""
+scp cam@cam.azienda.it:/tmp/cam-snapshot.db C:\claude-team\cam-team.db</code></pre>
+    </div>
+
+    <div class="nota rischio">
+      <span class="nota-titolo">Due trappole nella copia</span>
+      <p>Copiare il solo <code>.db</code> lascia fuori il <code>-wal</code>: finché SQLite non fa
+      il checkpoint i dati più recenti stanno lì, e avresti una copia vecchia <em>senza che nulla
+      te lo dica</em>. Ed è una copia <strong>in sola lettura</strong>: non rimandarla indietro,
+      sovrascriverebbe quello che le postazioni hanno spedito nel frattempo.</p>
+    </div>
+
+    <p>Poi in <code>config.json</code> della macchina dell'amministratore:</p>
+<pre><code>"team": {
+  "seats": 12,
+  "fee_per_seat": 122.0,
+  "currency": "EUR",
+  "db": "C:\\claude-team\\cam-team.db"
+}</code></pre>
+
+    <p><code>seats</code> qui pesa più che altrove: le postazioni ferme <strong>non si vedono, si
+    deducono</strong>, e in un team distribuito è ancora più facile che qualcuno smetta senza che
+    nessuno se ne accorga.</p>
+  </section>
+
+  <section id="chi-vede">
+    <h2>Chi vede cosa, alla fine</h2>
+    <div class="tabella-cont">
+      <table>
+        <thead><tr><th></th><th>Può scrivere</th><th>Vede il pannello</th><th>Vede i dati altrui</th></tr></thead>
+        <tbody>
+          <tr><td>Una postazione</td><td class="si">sì · token</td><td class="no">no · 404</td><td class="no">no</td></tr>
+          <tr><td>L'amministratore</td><td class="si">sì</td><td class="si">sì · auth + token</td><td class="si">sì</td></tr>
+          <tr><td>Chiunque su Internet</td><td class="no">no</td><td class="no">no</td><td class="no">no</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Con <code>--privacy pseudonimo</code> l'amministratore vede <strong>codici</strong>, non
+    indirizzi, a meno di avere anche la chiave. Il livello è scritto in testa a ogni riepilogo,
+    così chi riceve un documento non deve chiedere cosa ha in mano.</p>
+  </section>
+
+  <section id="scoperto">
+    <h2>Quello che resta scoperto</h2>
+    <p class="sotto-titolo">Detto, invece che lasciato credere risolto.</p>
+    <ul class="punti">
+      <li><strong>Il token è uno solo.</strong> Il proxy separa le rotte, non le credenziali: chi
+      ha il token e riesce a parlare direttamente con la 4318 — cioè chi ha accesso all'host —
+      passa sopra la separazione.</li>
+      <li><strong>Il raccoglitore non parla TLS da sé.</strong> Il cifrato lo mette il proxy. Se un
+      giorno il proxy sparisce dalla configurazione, il raccoglitore continua in chiaro senza
+      lamentarsi: è la cosa da ricontrollare dopo ogni intervento sull'host.</li>
+      <li><strong>La chiave degli pseudonimi su hardware altrui</strong> non offre la garanzia che
+      offre in sede.</li>
+      <li><strong>La GUI non parla col raccoglitore via rete</strong>, e il file va copiato a
+      scadenza.</li>
+    </ul>
+  </section>
+
+  <section id="controllo">
+    <h2>Elenco di controllo</h2>
+    <p class="sotto-titolo">Da spuntare prima di dire che è attivo.</p>
+    <ul class="controllo">
+      <li><label><input type="checkbox"><span>Il raccoglitore ascolta su <code>127.0.0.1</code>, non su <code>0.0.0.0</code></span></label></li>
+      <li><label><input type="checkbox"><span>La 4318 non è raggiungibile da Internet — <strong>verificato con <code>curl</code>, non supposto</strong></span></label></li>
+      <li><label><input type="checkbox"><span><code>https://cam.azienda.it/</code> risponde 401 senza credenziali</span></label></li>
+      <li><label><input type="checkbox"><span><code>/v1/metrics</code> è raggiungibile da una postazione</span></label></li>
+      <li><label><input type="checkbox"><span>Archivio e chiave in cartelle diverse, con permessi diversi</span></label></li>
+      <li><label><input type="checkbox"><span>Il raccoglitore riparte da solo dopo un reboot — provalo davvero, riavvia</span></label></li>
+      <li><label><input type="checkbox"><span>Claude Code è stato <strong>riavviato</strong> su ogni postazione dopo il blocco <code>env</code></span></label></li>
+      <li><label><input type="checkbox"><span><code>--status</code> elenca tutte le postazioni attese, nessuna muta</span></label></li>
+      <li><label><input type="checkbox"><span><code>seats</code> dichiarato e pari alle licenze pagate</span></label></li>
+      <li><label><input type="checkbox"><span>L'amministratore sa che il pannello vuole basic auth <strong>e</strong> <code>?token=</code></span></label></li>
+    </ul>
+  </section>
+
+  <p class="chiusura">
+    Comandi e rotte verificati contro il codice del raccoglitore e le prove il 14 agosto 2026.
+    La versione integrale e versionata è <code>docs/team-distribuito.md</code> nel repository;
+    quello che resta da fare nel codice è PF14 nel backlog.
+  </p>
+
+</div>
+</body>
+</html>
