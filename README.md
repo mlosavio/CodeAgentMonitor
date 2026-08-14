@@ -706,6 +706,12 @@ telemetria e l'agente su **ognuna** delle altre. Le due sezioni che seguono sono
 completa, nell'ordine in cui va fatta — prima il raccoglitore, perché è l'indirizzo che serve
 alle postazioni.
 
+> **Le postazioni non sono tutte sulla stessa rete?** Allora questa procedura non basta: apre la
+> porta in chiaro e dà a ogni postazione un token che apre anche il cruscotto. Per case, uffici
+> diversi e gente in viaggio — e per il caso in cui **il pannello lo deve vedere solo
+> l'amministratore** — c'è la guida a parte:
+> **[Attivare CAM in un team distribuito geograficamente](docs/team-distribuito.md)**.
+
 ### Attivarlo, parte prima: la macchina che raccoglie
 
 Una sola per tutto il gruppo. Le serve Python 3.9+, di essere raggiungibile dalle postazioni

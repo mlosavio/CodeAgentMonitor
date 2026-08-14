@@ -24,7 +24,7 @@ quello che manca.
 | [PF11](#pf11--prove-su-macos-e-linux) | Prove su macOS e Linux | **Linux fatto** 13/08 · macOS sospesa | — |
 | [PF12](#pf12--le-postazioni-che-consumano-e-non-sono-in-fattura) | Le postazioni che consumano e non sono in fattura | **fatto** 13/08 | — |
 | [PF13](#pf13--andamento-delladozione-nel-team) | Andamento dell'adozione nel team | **fatto** 13/08 | PF04 |
-| [PF14](#pf14--il-raccoglitore-fuori-dalla-rete-aziendale) | Il raccoglitore fuori dalla rete aziendale | da fare | — |
+| [PF14](#pf14--il-raccoglitore-fuori-dalla-rete-aziendale) | Il raccoglitore fuori dalla rete aziendale | in corso — guida fatta, codice no | — |
 | [PF15](#pf15--linterfaccia-in-inglese) | L'interfaccia in inglese | in corso — pagina fatta, app no | — |
 | [PF16](#pf16--cruscotto-per-sistemi-multi-agente) | Cruscotto per sistemi multi-agente | da valutare | — |
 
@@ -396,9 +396,39 @@ pluggabile: prima la seconda riga del tooltip era cablata sulle metriche persona
 
 ### PF14 — Il raccoglitore fuori dalla rete aziendale
 
-**Stato:** da fare · **Dipende da:** —
+**Stato:** in corso il 2026-08-14 — **guida fatta, codice no** · **Dipende da:** —
 
-Il raccoglitore oggi è pensato per una LAN: una macchina sempre accesa, raggiungibile dalle
+**Fatto: [docs/team-distribuito.md](docs/team-distribuito.md)**, la guida completa per il caso
+reale — postazioni sparse, e il pannello che lo deve vedere solo l'amministratore. La strada che
+funziona **oggi, senza toccare il codice**, è la separazione a livello di URL davanti al
+raccoglitore: le rotte di scrittura (`POST /v1/*`) aperte alle postazioni, quelle di lettura
+(`GET /`, `/api/*`, `/healthz`) chiuse dietro un reverse proxy con TLS e basic auth. Le rotte
+erano già separate nel codice: mancava solo qualcuno che lo dicesse. Aiuta che il cruscotto sia
+HTML renderizzato dal server e non faccia chiamate `fetch`, altrimenti servirebbe far passare
+anche le API.
+
+Ricaduta nel codice, piccola ma necessaria: `--setup` e `--status` componevano l'indirizzo come
+`http://host:porta` fisso, e dietro TLS producevano un blocco di configurazione sbagliato —
+consegnato proprio a chi aveva chiesto al programma di scriverlo. Ora `indirizzo_base()` accetta
+un `--host` che è già un indirizzo completo e lo usa com'è (`--setup --host
+https://cam.azienda.it`). Nove prove nuove in `test_collector.py`.
+
+**Resta da fare nel codice**, ed è quello che la guida deve dichiarare come scoperto:
+
+- **token distinti per lettura e scrittura.** Il proxy separa le rotte, ma il token resta uno:
+  chi ce l'ha e riesce a parlare direttamente con la 4318 passa sopra la separazione. Utile
+  **anche in LAN**, indipendentemente dal caso distribuito.
+- **TLS nel raccoglitore, o la rinuncia esplicita.** Oggi il cifrato lo mette il proxy; se il
+  proxy sparisce dalla configurazione, il raccoglitore continua in chiaro senza lamentarsi. La
+  cosa minima e onesta è che si accorga di ascoltare fuori da `127.0.0.1` senza TLS davanti e lo
+  dica all'avvio, come già fa per il token mancante.
+- **La GUI non sa leggere un archivio remoto.** Oggi l'amministratore copia il file (`.backup` di
+  SQLite, non `cp`, per via del `-wal`). Un `team.db` che accetti un URL sarebbe la chiusura
+  vera del cerchio.
+
+Quello che segue è l'analisi da cui è nata la guida.
+
+Il raccoglitore era pensato per una LAN: una macchina sempre accesa, raggiungibile dalle
 postazioni, dietro il firewall aziendale. La domanda che lo mette in crisi è legittima e
 ricorrente — **i portatili che lavorano fuori sede** — e la risposta ovvia, un VPS con la porta
 aperta su Internet, oggi **non si può dare**. Tre ragioni, in ordine di gravità.

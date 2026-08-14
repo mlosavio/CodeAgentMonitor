@@ -432,6 +432,39 @@ verifica("attributi di resource ereditati dal datapoint",
 verifica("attributo di datapoint conservato", punti[0]["type_attr"], "cacheRead")
 
 # --------------------------------------------------------------------------- #
+# L'indirizzo a cui le postazioni si collegano
+# --------------------------------------------------------------------------- #
+
+print("\nL'indirizzo pubblico, quando non coincide con quello di ascolto")
+print("-" * 72)
+
+verifica("host e porta si compongono",
+         cc.indirizzo_base("srv.azienda.it", 4318), "http://srv.azienda.it:4318")
+verifica("in locale idem",
+         cc.indirizzo_base("127.0.0.1", 4318), "http://127.0.0.1:4318")
+# Dietro un reverse proxy che termina TLS l'indirizzo pubblico non ha piu'
+# niente a che vedere con host e porta di ascolto: comporlo darebbe
+# "http://https://cam.azienda.it:4318", che e' la configurazione sbagliata
+# consegnata proprio a chi ha chiesto al programma di scriverla.
+verifica("un indirizzo https completo resta com'e'",
+         cc.indirizzo_base("https://cam.azienda.it", 4318), "https://cam.azienda.it")
+verifica("anche http esplicito",
+         cc.indirizzo_base("http://cam.azienda.it:8080", 4318), "http://cam.azienda.it:8080")
+verifica("la barra finale non raddoppia",
+         cc.indirizzo_base("https://cam.azienda.it/", 4318), "https://cam.azienda.it")
+verifica("gli spazi intorno non rompono",
+         cc.indirizzo_base("  https://cam.azienda.it  ", 4318), "https://cam.azienda.it")
+
+# E quello che conta davvero: il blocco consegnato alle postazioni.
+env_tls = cc.setup_env(cc.indirizzo_base("https://cam.azienda.it", 443), "T0K3N")
+verifica("il blocco per le postazioni punta a HTTPS",
+         env_tls["OTEL_EXPORTER_OTLP_ENDPOINT"], "https://cam.azienda.it")
+verifica("e porta il token nell'intestazione",
+         env_tls["OTEL_EXPORTER_OTLP_HEADERS"], "Authorization=Bearer T0K3N")
+verifica("il testo dei prompt resta spento anche li'",
+         env_tls["OTEL_LOG_USER_PROMPTS"], "0")
+
+# --------------------------------------------------------------------------- #
 
 falliti = [n for ok, n in esiti if not ok]
 print("\n" + "=" * 72)

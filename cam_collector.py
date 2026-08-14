@@ -1651,6 +1651,26 @@ def h_ago(quando: float | None) -> str:
     return f"{int(d // 86400)}g fa"
 
 
+def indirizzo_base(host: str, port: int) -> str:
+    """L'indirizzo a cui le postazioni si COLLEGANO, non quello su cui si ascolta.
+
+    Di solito si compone da host e porta. Ma quando il raccoglitore sta dietro a
+    un reverse proxy che termina TLS — l'unico modo difendibile di raggiungerlo
+    da fuori dalla rete aziendale — l'indirizzo pubblico non ha piu' niente a che
+    vedere con host e porta di ascolto: e' `https://cam.azienda.it` sulla 443,
+    mentre il raccoglitore ascolta su 127.0.0.1:4318.
+
+    Percio' un `--host` che e' gia' un indirizzo completo viene preso com'e'.
+    Comporlo lo trasformerebbe in `http://https://cam.azienda.it:4318`, cioe' in
+    una configurazione che non funziona e che va corretta a mano proprio da chi
+    ha chiesto al programma di scriverla.
+    """
+    h = (host or "").strip().rstrip("/")
+    if h.startswith(("http://", "https://")):
+        return h
+    return f"http://{h}:{port}"
+
+
 def print_status(store: Store, endpoint: str, token: str | None = None) -> int:
     """Sta funzionando? Risposta in una schermata, senza scavare.
 
@@ -2054,7 +2074,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.setup:
-        print_setup(f"http://{args.host}:{args.port}", args.token)
+        print_setup(indirizzo_base(args.host, args.port), args.token)
         return 0
 
     if args.setup_service:
@@ -2133,7 +2153,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.status:
-        return print_status(Store(args.db), f"http://{args.host}:{args.port}",
+        return print_status(Store(args.db), indirizzo_base(args.host, args.port),
                             args.token)
 
     if args.relazione:
