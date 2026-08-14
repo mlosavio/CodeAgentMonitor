@@ -17,17 +17,23 @@ riavviare Claude Code.
 
 Tre ruoli, non tre programmi: due di questi girano sulla stessa macchina.
 
-```
-   ┌──────────────┐        ┌──────────────────┐        ┌──────────────┐
-   │ Ogni         │  HTTP  │ Il raccoglitore  │ scrive │ L'archivio   │
-   │ postazione   │──────▶ │ porta 4318       │──────▶ │ cam-team.db  │
-   │ cam_agent.py │ uscita └──────────────────┘        └──────┬───────┘
-   └──────────────┘                                           │ legge il FILE
-                                                              │ non la rete
-                                                      ┌───────▼──────┐
-                                                      │ La console   │
-                                                      │ cam_gui.py   │
-                                                      └──────────────┘
+```mermaid
+flowchart LR
+    P["Ogni postazione<br/><code>cam_agent.py</code><br/>+ Claude Code"]
+    R["Il raccoglitore<br/><code>cam_collector.py</code><br/>porta 4318"]
+    A[("L'archivio<br/>cam-team.db")]
+    C["La console<br/><code>cam_gui.py</code>"]
+
+    P -- "HTTP, solo in uscita" --> R
+    R -- "scrive" --> A
+    A -- "legge il FILE,<br/>non la rete" --> C
+
+    classDef post fill:#fdeee9,stroke:#a83e26,color:#16202b
+    classDef host fill:#e8f0f7,stroke:#2b5c8a,color:#16202b
+    classDef cons fill:#e9f2ec,stroke:#35674d,color:#16202b
+    class P post
+    class R,A host
+    class C cons
 ```
 
 | Ruolo | Che cosa gira | Su quale macchina |

@@ -42,9 +42,33 @@ La buona notizia è che **le rotte sono già separate**, anche se il token non l
 | **Lettura** | `GET /`, `GET /api/summary`, `GET /api/team` | **solo l'amministratore** |
 | Diagnostica | `GET /healthz` | solo l'amministratore |
 
-Quindi la separazione si mette **davanti** al raccoglitore, a livello di URL, con un reverse
-proxy. Non è un ripiego: è il punto in cui si può fare oggi, senza toccare il codice, e
-resta valida anche quando i token separati arriveranno
+```mermaid
+flowchart LR
+    P["Postazioni<br/>ovunque nel mondo"]
+    AD["Amministratore<br/>basic auth + token"]
+
+    subgraph HOST["l'host - il raccoglitore non e' mai raggiungibile da fuori"]
+        PX["Proxy<br/>TLS sulla 443"]
+        RC["Raccoglitore<br/>127.0.0.1:4318"]
+    end
+
+    P  -- "POST /v1/* col token" --> PX
+    P  -. "GET / bloccato, 404" .-x PX
+    AD -- "GET / con le credenziali" --> PX
+    PX -- "in locale" --> RC
+
+    classDef post fill:#fdeee9,stroke:#a83e26,color:#16202b
+    classDef host fill:#e8f0f7,stroke:#2b5c8a,color:#16202b
+    classDef adm  fill:#e9f2ec,stroke:#35674d,color:#16202b
+    class P post
+    class PX,RC host
+    class AD adm
+```
+
+La separazione si mette quindi **davanti** al raccoglitore, non dentro: il proxy fa passare le
+rotte di scrittura e blocca quelle di lettura per chiunque non sia l'amministratore. Non è un
+ripiego — è il punto in cui si può fare **oggi, senza toccare il codice**, e resta valida anche
+quando i token separati arriveranno
 ([PF14](../TODO.md#pf14--il-raccoglitore-fuori-dalla-rete-aziendale)).
 
 Un dettaglio che semplifica tutto: **il cruscotto è HTML renderizzato dal server**, non fa
