@@ -88,6 +88,7 @@ python cam.py --by-project  :: totali per progetto
 python cam.py --traces      :: un turno per riga, non una sessione
 python cam.py --trend       :: andamento nel tempo e indicatori
 python cam.py --watch       :: cruscotto live nel terminale
+python cam.py --flusso      :: sessioni aperte: al modello o sulla macchina
 python cam.py --json        :: output machine-readable
 ```
 
@@ -107,6 +108,7 @@ python cam.py --json        :: output machine-readable
 | `--grana giorno\|settimana\|mese` | con `--trend`: ampiezza del periodo |
 | `--finestra GIORNI` | con `--trend`: giorni confrontati con i GIORNI precedenti |
 | `--chat` | con `--session`: la conversazione in Markdown |
+| `--flusso` | [sessioni aperte adesso](#modello-o-macchina): cosa parte verso il modello e cosa resta sulla macchina; con `--session` il dettaglio di una, anche chiusa; con `--watch` resta e aggiorna |
 | `--watch` / `--interval S` | live sulla sessione modificata più di recente |
 | `--idle-gap S` | pausa oltre la quale il tempo non è "attivo" (default 300s) |
 | `--no-cache` / `--clear-cache` | ignora / svuota la cache di analisi ([l'archivio resta](#larchivio-cam-localdb)) |
@@ -130,9 +132,9 @@ Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla 
 
 - **Tessere** in alto: quanto hai pagato, quanto varrebbe a listino, tempo attivo, messaggi,
   sessione in corso e **consumo dei limiti del piano**.
-- Sei schede: **Progetti**, **Sessioni** (con il titolo che Claude Code assegna alla
-  conversazione), **[Traces](#i-turni)**, **[Andamento](#andamenti-e-indicatori)**, **Mesi** e
-  **Persone**. Colonne ordinabili; l'ordinamento usa i valori numerici, non le stringhe
+- Sette schede: **Progetti**, **Sessioni** (con il titolo che Claude Code assegna alla
+  conversazione), **[Traces](#i-turni)**, **[Andamento](#andamenti-e-indicatori)**, **Mesi**,
+  **Persone** e **[Attive](#modello-o-macchina)**. Colonne ordinabili; l'ordinamento usa i valori numerici, non le stringhe
   formattate, quindi `$2,055.7` non finisce sotto `$301.4`.
 - **Persone** mostra il consumo di più macchine e compare popolata solo se hai avviato il
   [raccoglitore](#più-macchine-il-pannello-di-team). L'intestazione della prima colonna dice
@@ -143,6 +145,10 @@ Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla 
   stima del modello — compare *Fatturato*, che è quello che la console addebita davvero; e
   **compaiono anche le postazioni che pagano senza consumare**, che altrimenti non esisterebbero
   in nessuna riga.
+- **Attive** elenca le sessioni di Claude Code aperte adesso e, per ognuna, quanto contenuto è
+  partito verso il modello e quanto lavoro è rimasto sulla macchina. Si aggiorna da sola ogni
+  2 s finché la guardi; **doppio click su una sessione** apre il dettaglio, che resta vivo
+  anche lui. La guida completa, colonna per colonna, è in [Modello o macchina](#modello-o-macchina).
 - **Ogni intestazione ha la sua spiegazione** al passaggio del mouse.
 - **Doppio click su una sessione** apre la conversazione, rileggibile, con export in Markdown.
 - **Doppio click su un turno** nella scheda Traces apre i suoi span: dove è finito il tempo.
@@ -161,7 +167,7 @@ Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla 
 Aspetto: superfici piatte, tabella disegnata su Canvas, tema chiaro/scuro che segue il sistema
 (barra del titolo inclusa) e si forza con `--light` / `--dark`.
 
-Opzioni: `--theme auto|light|dark`, `--tab progetti|sessioni|traces|andamento|mesi|persone`, `--live`,
+Opzioni: `--theme auto|light|dark`, `--tab progetti|sessioni|traces|andamento|mesi|persone|attive`, `--live`,
 `--detail <uuid>`, `--auto-refresh MIN`, `--locale us|it`.
 
 Il pulsante **Configura** apre le impostazioni vere, non il file JSON: abbonamento, team,
@@ -473,6 +479,260 @@ davanti**. Cerchi «riconciliazione», restringi a una sessione, esporti quello.
 Le risposte vengono dall'archivio del testo. Senza, escono `null` e il comando dice **quanti**
 turni sono usciti senza: un dataset con metà delle risposte vuote è peggio di nessun dataset, e
 non deve sembrare completo.
+
+---
+
+## Modello o macchina
+
+Una sessione di Claude Code è fatta di due lavori che si alternano e che nei totali si
+confondono:
+
+- le **richieste al modello**, che partono verso Anthropic: ogni volta viaggia la conversazione
+  intera, più le istruzioni e l'elenco degli strumenti;
+- il lavoro dell'**harness** — Claude Code sulla tua macchina — che legge file, esegue comandi e
+  applica modifiche. Il modello chiede, la macchina esegue, e al modello torna il risultato.
+
+La scheda **Attive** risponde a una domanda sola, sulle sessioni aperte adesso: **quanto di
+quello che succede parte verso il modello, e quanto resta qui?**
+
+![La scheda Attive: una riga per sessione aperta](docs/attive.png)
+
+*Le sessioni delle schermate sono dimostrative: progetti, titoli e contenuti sono inventati.*
+
+### Come si avvia
+
+Non c'è niente da installare o da accendere in Claude Code: il pannello legge i transcript che
+Claude Code scrive già. Serve solo che ci sia **almeno una sessione di Claude Code aperta** —
+nel terminale, in VS Code o nell'app.
+
+**Dal pannello grafico:**
+
+```bat
+python cam_gui.py --tab attive     :: apre direttamente sulla scheda
+python cam_gui.py                  :: poi click su «Attive», l'ultima scheda a destra
+```
+
+**Dal terminale**, senza finestra:
+
+```bat
+python cam.py --flusso                     :: le sessioni aperte adesso, ed esce
+python cam.py --flusso --watch             :: resta e aggiorna (Ctrl-C per uscire)
+python cam.py --flusso --session a1b2c3d4  :: il dettaglio di una, anche già chiusa
+python cam.py --flusso --project gestionale :: solo quelle di un progetto
+python cam.py --flusso --json              :: gli stessi numeri, machine-readable
+```
+
+Per `--session` basta il prefisso dell'identificativo, quello della colonna `SESSIONE`.
+
+### Come si usa
+
+1. **Apri la scheda Attive.** Compare una riga per ogni sessione di Claude Code aperta sulla
+   macchina. La prima lettura di una sessione lunga richiede qualche secondo; poi la scheda si
+   aggiorna da sola ogni 2 secondi, leggendo solo le righe nuove dei transcript.
+2. **Guarda il pallino.** `●` = la sessione sta lavorando, `○` = aspetta te. In alto a destra
+   c'è il riepilogo: quante sono aperte e quante al lavoro.
+3. **Passa il mouse su un'intestazione** per sapere cosa misura quella colonna, senza tornare
+   a questa pagina.
+4. **Click su un'intestazione** per ordinare; un secondo click inverte l'ordine.
+5. **Doppio click su una sessione** per aprire il dettaglio: da dove viene quello che è partito
+   e quali strumenti sono stati eseguiti. Anche il dettaglio resta aggiornato finché è aperto.
+6. **`Ctrl+C`** copia la riga selezionata, intestazioni comprese, pronta da incollare in un
+   foglio di calcolo.
+
+La scheda lavora solo mentre la guardi (o finché resta aperto un dettaglio): su un'altra scheda
+non legge niente. Non dipende dal pulsante **● Live**, che riguarda solo la tessera in alto, né
+dai filtri di periodo e di ricerca, che qui non si applicano.
+
+![La spiegazione di una colonna, al passaggio del mouse](docs/attive-aiuto.png)
+
+### Le colonne della scheda
+
+Fra parentesi il nome della stessa colonna nell'uscita di `python cam.py --flusso`.
+
+| Colonna | Cosa dice | Unità | Come leggerla |
+|---|---|---|---|
+| **Sessione** (`SESSIONE`, `PROGETTO`, `STATO`) | Progetto e titolo che Claude Code ha dato alla conversazione. `●` lavora, `○` aspetta | — | Nel terminale l'identificativo, il progetto e lo stato sono tre colonne separate |
+| **Richieste** (`REQ`) | Quante volte la sessione ha chiamato il modello, subagent compresi | conteggio esatto | Ogni lettura di file o comando costa una richiesta in più: il modello chiede, riceve il risultato, e va richiamato |
+| **Al modello** (`AL MODELLO`) | Token entrati nel modello sommando **tutte** le richieste: input, più quello riletto dalla cache o scritto in cache | token, esatti | Cresce molto più in fretta del contenuto, perché ogni richiesta rispedisce la conversazione intera |
+| **Dal modello** (`DAL MODELLO`) | Token generati: risposte, ragionamento, chiamate agli strumenti | token, esatti | È la parte più cara a listino e di gran lunga la più piccola |
+| **Nuovo** (`NUOVO`) | Contenuto spedito al modello **per la prima volta**: ogni pezzo contato una volta sola, anche se poi è ripartito con ogni richiesta | caratteri di testo | È la misura di *cosa* è uscito dalla macchina. Il dettaglio lo divide per provenienza |
+| **Da strumenti** (`DA STRUMENTI`) | Quanta parte del nuovo sono risultati di strumenti: file letti, output di comandi | quota | Alta = è la macchina, non tu, a riempire il contesto. È il caso normale |
+| **In locale** (`TOOL`) | Strumenti eseguiti da Claude Code sulla macchina: letture, comandi, modifiche, ricerche | conteggio | Non conta quelli che girano altrove: server MCP, ricerche in rete, altri agenti |
+| **Resta qui** (`RESTA QUI`) | Quello che gli strumenti locali hanno prodotto o maneggiato **senza** spedirlo al modello | caratteri di testo | Cresce con le modifiche (il file intero resta qui, parte una riga di conferma) e con gli output lunghi (su disco per intero, al modello un'anteprima) |
+| **T. modello** (`T.MODELLO`) | Tempo passato ad aspettare le risposte: dalla partenza di ogni richiesta alla fine della sua risposta | tempo | Con dei subagent in parallelo può superare il tempo di orologio |
+| **T. locale** (`T.LOCALE`) | Tempo passato dentro gli strumenti; quelli lanciati insieme contano una volta | tempo | Comprende l'attesa di un permesso che dovevi concedere tu |
+| **Ultima** | Quanto tempo fa la sessione ha scritto l'ultima riga | — | Solo nel pannello |
+
+Due cose valgono per tutte le colonne:
+
+- **Token e caratteri non si convertono.** I token esatti li dà l'API, ma solo come totale per
+  richiesta, senza dire di chi sono. I caratteri dicono la composizione; i token, il conto.
+- **«—» non è zero.** Vuol dire «qui non si sa». Compare al posto di *Richieste*, *Nuovo*,
+  *Da strumenti* e *T. modello* per le sessioni aperte con un Claude Code precedente alla
+  2.1.309, che non registrava le richieste: è il caso della terza riga nella schermata.
+
+### Un esempio, letto riga per riga
+
+```
+SESSIONE  PROGETTO    STATO    REQ  AL MODELLO  DAL MODELLO     NUOVO  DA STRUMENTI  TOOL  RESTA QUI  T.MODELLO  T.LOCALE
+a1b2c3d4  gestionale  lavora    57       5.08M          13k  802.2 KB           68%    51     341 KB      5m54s     2m52s
+e5f6a7b8  sito-web    aspetta   12        454k         1.8k  171.1 KB           33%    10      35 KB      1m05s       53s
+c9d0e1f2  appunti     aspetta    —         43k         3.4k         —             —     7      21 KB          —        2s
+```
+
+- **gestionale** sta lavorando. In 57 richieste sono entrati nel modello 5,08 milioni di token,
+  ma il contenuto davvero nuovo è 802 KB: la differenza è la stessa conversazione ricaricata
+  ogni volta. Due terzi di quel contenuto (68%) sono risultati di strumenti. Sulla macchina
+  sono stati eseguiti 51 strumenti, e 341 KB di quello che hanno maneggiato non sono mai
+  partiti.
+- **sito-web** aspetta. Solo un terzo del contenuto viene dagli strumenti: su una sessione
+  corta pesa di più quello che Claude Code aggiunge all'inizio — istruzioni, elenco degli
+  strumenti, contesto del progetto — che è lo stesso qualunque cosa tu chieda.
+- **appunti** è stata aperta con una versione vecchia di Claude Code. I token ci sono, perché
+  stanno nelle risposte; gli strumenti pure. Le richieste e la composizione no, e la riga lo
+  dice con «—» invece di inventare uno zero.
+
+### Il dettaglio di una sessione
+
+Doppio click su una riga, oppure `python cam.py --flusso --session a1b2c3d4`.
+
+![Il dettaglio di una sessione: cosa è partito e cosa è stato eseguito](docs/attive-dettaglio.png)
+
+**Le cinque tessere in alto**
+
+| Tessera | Numero grande | Riga sotto |
+|---|---|---|
+| **Richieste** | chiamate al modello, subagent compresi | *ogni messaggio partito N volte*: quante volte, in media, lo stesso messaggio è stato rispedito. 20 vuol dire che un file letto all'inizio ha viaggiato in venti richieste |
+| **Al modello** | token entrati, in tutto | quanta parte è arrivata dalla cache invece che a prezzo pieno, e i token usciti |
+| **Contenuto nuovo** | testo spedito per la prima volta | la quota che viene dagli strumenti |
+| **In locale** | strumenti eseguiti sulla macchina | quanto di ciò che hanno prodotto è rimasto qui |
+| **Attesa del modello** | tempo passato ad aspettare le risposte | tempo passato negli strumenti |
+
+**«Cosa è partito verso il modello»** divide il contenuto nuovo per chi l'ha prodotto. La barra
+confronta le righe fra loro, la percentuale è sul totale.
+
+| Riga | Cosa contiene |
+|---|---|
+| **Scritto da te** | I tuoi messaggi, e le immagini che alleghi. È quasi sempre la riga più piccola: qui 243 caratteri su 802 KB |
+| **Aggiunto da Claude Code** | Quello che parte senza che tu l'abbia scritto: istruzioni di sistema, definizioni degli strumenti, contesto del progetto (i `CLAUDE.md`), promemoria, contesto dell'editor |
+| **Risultati degli strumenti** | File letti, output di comandi, risultati di ricerche: quello che la macchina ha prodotto ed è stato girato al modello |
+| **Risposte del modello, rispedite** | Quello che il modello ha già detto e fatto — testo, ragionamento, chiamate agli strumenti — che torna indietro come storia nelle richieste successive |
+
+**«Cosa è stato eseguito, e dove»** ha una riga per strumento.
+
+| Colonna | Cosa dice |
+|---|---|
+| **Strumento** | Il nome con cui il modello lo chiama: `Read`, `Bash`, `Edit`, … Quelli che cominciano per `mcp__` sono di un server MCP |
+| **Dove gira** | *sulla macchina*: lo esegue Claude Code qui. *server MCP*: lo esegue un server esterno a Claude Code. *in rete*: ricerche e pagine web. *altri agenti*: lavoro delegato a un subagent, che è a sua volta fatto di richieste al modello |
+| **Volte** | Quante esecuzioni si sono concluse con un risultato |
+| **Prodotto** | Quanto testo lo strumento ha prodotto o maneggiato in locale |
+| **Al modello** | Quanta parte ne è stata girata al modello come risultato |
+| **Resta qui** | La differenza fra le due: prodotto in locale e non spedito |
+| **Tempo** | Dalla chiamata al risultato, sommando le esecuzioni; attese di permesso comprese |
+| **Errori** | Esecuzioni tornate al modello come errore: comando fallito, file non trovato, permesso negato |
+
+Nel terminale le stesse due tabelle:
+
+```
+DA DOVE VIENE                            TESTO  QUOTA
+scritto da te                         243 byte    <1%
+aggiunto da Claude Code               221.1 KB    28%
+risultati degli strumenti             542.9 KB    68%
+risposte del modello, rispedite          38 KB     5%
+contenuto spedito per la prima volta  802.2 KB
+
+  ogni messaggio è partito in media 20 volte: a ogni richiesta riparte la conversazione intera
+  richieste per origine 45 sdk, 12 agent:builtin:general-purpose
+
+STRUMENTO             DOVE GIRA        N  PRODOTTO  AL MODELLO  RESTA QUI  TEMPO
+Read                  sulla macchina  22  445.2 KB    445.2 KB          —     6s
+Edit                  sulla macchina  11  263.1 KB      1.6 KB   261.5 KB     6s
+Bash                  sulla macchina   9  119.7 KB     55.2 KB    64.5 KB  2m25s
+Grep                  sulla macchina   7   23.1 KB     23.1 KB          —     3s
+Write                 sulla macchina   1   15.2 KB    140 byte    15.1 KB     0s
+mcp__database__query  server MCP       2    9.7 KB      9.7 KB          —     4s
+Agent                 altri agenti     1    5.1 KB      2.1 KB       3 KB  1m35s
+WebSearch             in rete          1      4 KB        4 KB          —     6s
+Glob                  sulla macchina   1    1.9 KB      1.9 KB          —     0s
+
+  eseguiti sulla macchina 51 su 55   prodotto 868.2 KB   girato al modello 61%   resta qui 341 KB
+```
+
+Tre righe che dicono tre cose diverse:
+
+- **`Read`** gira al modello tutto quello che legge: 445 KB prodotti, 445 KB partiti. È lui a
+  riempire il contesto, ed è il primo posto dove guardare se una sessione consuma troppo.
+- **`Edit`** maneggia in locale il file intero — 263 KB in undici modifiche — e al modello
+  rimanda una riga di conferma per volta: 1,6 KB in tutto.
+- **`Bash`** sta nel mezzo: metà del suo output è rimasta qui, perché un comando ha scritto
+  troppo e al modello ne è andata solo un'anteprima.
+
+*Richieste per origine* compare quando non tutte le richieste vengono dalla conversazione
+principale: `sdk` (o il nome dell'interfaccia in uso) è la conversazione, `agent:…` sono i
+subagent.
+
+### Da dove vengono questi numeri
+
+Dalla versione **2.1.309** Claude Code scrive nel transcript, oltre alla conversazione, le
+richieste per quello che sono:
+
+| riga | cosa contiene |
+|---|---|
+| `api-request-shape` | istruzioni di sistema e definizioni degli strumenti |
+| `api-request-blob` | un messaggio spedito, identificato dal suo hash |
+| `api-request` | una richiesta: quella da cui parte (`base`), quanti suoi messaggi tiene (`keep`), quali aggiunge (`tail`) |
+
+Quindi **quante** richieste, **quando** e **con quanti messaggi** non si stima: si legge. Il
+lavoro locale sta invece nelle righe dei risultati, che portano due cose distinte:
+`toolUseResult` è ciò che lo strumento ha prodotto sulla macchina, `message.content` è la parte
+girata al modello. La differenza fra le due è la colonna *Resta qui*.
+
+Tutto viene letto dal disco, in sola lettura. Il pannello non intercetta il traffico, non parla
+con Anthropic e non modifica i transcript.
+
+### Il punto in cui è facile sbagliare
+
+Claude Code scrive un blob **solo per i messaggi che non sono già una riga della
+conversazione**: il primo, che viaggia coi promemoria; i messaggi di sistema; quelli che in
+viaggio hanno una forma diversa. Gli altri hash di `tail` rimandano alle righe normali.
+
+Contare solo i blob perde metà dei risultati degli strumenti. Contare blob e righe insieme li
+raddoppia, perché lo stesso risultato può stare in entrambi. Nessuno dei due errori si vede: i
+numeri restano plausibili. Si contano quindi tutti e due, **un blocco alla volta, una volta
+sola** — l'id per le chiamate agli strumenti e i loro risultati, il testo stesso per il resto.
+`test_flusso.py` costruisce apposta i tre casi: blob prima della riga, riga prima del blob,
+storia riemessa da un `--resume`.
+
+### Cosa NON dice
+
+- **Non dice quanto costa.** Per quello ci sono le altre schede. Qui i token servono a dare la
+  scala, non il prezzo.
+- **Il contenuto è in caratteri, non in token**, e fra le due unità non c'è conversione.
+- **«T. locale» comprende l'attesa di un permesso.** Il transcript segna quando uno strumento è
+  stato chiesto e quando ha risposto: se in mezzo c'eri tu che dovevi dire di sì, non lo
+  distingue.
+- **«Server MCP» non dice dove gira il server**: può essere un processo sulla macchina o un
+  servizio remoto, e dal transcript non si distingue. Per questo sta in una voce sua, fuori dal
+  conto di ciò che è eseguito in locale.
+- **«Resta qui» non vuol dire «riservato».** Dice che quel testo non è partito *come risultato
+  di quello strumento*. Un file modificato con `Edit` può essere stato letto prima con `Read`, e
+  allora è partito da lì.
+- **Non entra nell'archivio.** Questi numeri si ricalcolano dal transcript ogni volta: per una
+  sessione chiusa il cui transcript è scaduto, questa vista non c'è.
+
+### Se la scheda è vuota
+
+| Cosa vedi | Perché |
+|---|---|
+| *nessuna sessione di Claude Code aperta* | Non c'è nessun processo di Claude Code vivo, oppure la sessione è appena stata aperta e non ha ancora un messaggio |
+| *leggo le sessioni aperte…* che dura | È la prima lettura di transcript grossi: decine di MB richiedono qualche secondo, una volta sola |
+| Una sessione chiusa non compare | È giusto: la scheda mostra solo quelle aperte. Per una chiusa, `python cam.py --flusso --session <uuid>` |
+| «—» in metà delle colonne | La sessione gira su un Claude Code precedente alla 2.1.309: aggiornalo e apri una sessione nuova |
+
+**Quali sessioni sono «aperte».** Quelle con un processo vivo: Claude Code tiene un file per
+processo in `~/.claude/sessions/`, che dice anche se sta lavorando o aspetta te. Un file rimasto
+da un processo morto si scarta guardando il pid. Dove quei file non ci sono, vale il transcript
+toccato negli ultimi quindici minuti.
 
 ---
 
@@ -1442,6 +1702,11 @@ Meta' delle prove guardano che non venga inventato niente — costo e token rest
 non diventano zero — e l'altra meta' che un file con una forma inattesa faccia perdere quella
 sessione invece di far cadere il programma: e' storage interno di VS Code, e cambia con le
 versioni dell'estensione.
+
+Se tocchi [modello o macchina](#modello-o-macchina), `python test_flusso.py` deve restare
+verde. Sorveglia i modi in cui quei numeri si sbagliano restando plausibili: lo stesso contenuto
+contato due volte perché sta sia in una riga sia in una richiesta registrata, il file intero di
+una modifica scambiato per ciò che è partito, uno zero al posto di «non misurato».
 
 Se tocchi gli [andamenti](#andamenti-e-indicatori), `python test_statistiche.py` deve restare
 verde. Guarda i punti in cui una statistica dice una bugia senza accorgersene: che i periodi

@@ -54,6 +54,14 @@ secondo è sbagliato senza che nessuno se ne accorga.
 `CodeAgentMonitor.png` è la copertina del README. Si ricostruisce dalle finestre reali del
 pannello; nomi di progetti e titoli delle conversazioni sono sfocati, i numeri sono veri.
 
+`attive.png`, `attive-aiuto.png` e `attive-dettaglio.png` illustrano la guida
+[Modello o macchina](../README.md#modello-o-macchina). Qui la regola è l'altra: **niente è
+sfocato perché niente è vero**. Le tre sessioni sono transcript costruiti apposta — progetti,
+titoli e contenuti inventati — e il pannello è stato avviato su quella cartella con
+`--base`, la configurazione d'esempio e la sorgente Copilot spenta, così nelle immagini non
+entra nessun dato della macchina su cui sono state fatte. Gli esempi da terminale della guida
+vengono dalle stesse sessioni, quindi numeri e schermate coincidono.
+
 ## Le copie pubblicate
 
 Le due guide sono state pubblicate anche come pagine su claude.ai. **Non sono la fonte** — la

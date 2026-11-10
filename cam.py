@@ -37,6 +37,7 @@ import time
 
 import cam_archivio
 import cam_copilot
+import cam_flusso
 import cam_statistiche as cam_stat
 
 __version__ = "1.0.0"
@@ -65,6 +66,7 @@ UNI = _unicode_ok()
 HR = "─" if UNI else "-"
 ARROW = "»" if UNI else ">"
 BULLET = "·" if UNI else "."
+DASH = "—" if UNI else "-"
 
 
 class C:
@@ -3053,6 +3055,299 @@ def view_watch(base: str, pricing: dict, args) -> None:
         print("\n" + C.w("  interrotto.", C.DIM))
 
 
+# --------------------------------------------------------------------------- #
+# Modello o macchina: cosa parte verso Anthropic e cosa resta sul posto
+# --------------------------------------------------------------------------- #
+
+
+class FileMisurato:
+    """Un transcript letto una volta sola per due conti.
+
+    `LiveFile` alimenta il parser dei costi; qui la stessa riga, gia'
+    decodificata, va anche a `cam_flusso.Flusso`. Decodificare due volte un
+    file da decine di MB per sapere due cose diverse sarebbe il modo piu'
+    semplice e piu' lento di farlo.
+    """
+
+    def __init__(self, path: str, pricing: dict):
+        self.path = path
+        self.pricing = pricing
+        self._azzera()
+
+    def _azzera(self) -> None:
+        self.parser = TranscriptParser(self.path, self.pricing)
+        self.flusso = cam_flusso.Flusso(subagent=self.parser.is_subagent)
+        self.pos = 0
+        self._parziale = None
+
+    def update(self) -> bool:
+        """Legge i byte nuovi. True se e' arrivata almeno una riga completa."""
+        try:
+            size = os.path.getsize(self.path)
+        except OSError:
+            return False
+        if size < self.pos:              # file troncato o ricreato: riparto da capo
+            self._azzera()
+        if size == self.pos:
+            return False
+        try:
+            with open(self.path, "rb") as fh:
+                fh.seek(self.pos)
+                data = fh.read()
+        except OSError:
+            return False
+        cut = data.rfind(b"\n")
+        if cut == -1:
+            return False                 # nessuna riga completa: ancora in scrittura
+        self.pos += cut + 1
+        for raw in data[: cut + 1].split(b"\n"):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                row = json.loads(raw.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                self.parser.bad_lines += 1
+                continue
+            if isinstance(row, dict):
+                self.parser.ingest(row)
+                self.flusso.ingest(row)
+        self._parziale = None
+        return True
+
+    def parziale(self) -> dict:
+        if self._parziale is None:
+            self._parziale = self.flusso.snapshot()
+        return self._parziale
+
+
+class Osservatorio:
+    """Le sessioni in corso, con il loro flusso, tenute aggiornate.
+
+    Tiene un `FileMisurato` per transcript e ricostruisce la riga di una
+    sessione solo quando uno dei suoi file e' cresciuto: tre sessioni aperte e
+    ferme non costano niente a ogni giro.
+    """
+
+    def __init__(self, base: str, pricing: dict, idle_gap: float):
+        self.base = base
+        self.pricing = pricing
+        self.idle_gap = idle_gap
+        self.files: dict[str, FileMisurato] = {}
+        self.righe: dict[str, tuple] = {}     # session_id -> (file, riga)
+
+    def sessione(self, sid: str, files: list[str]) -> dict:
+        cambiato = False
+        for path in files:
+            fm = self.files.get(path)
+            if fm is None:
+                fm = self.files[path] = FileMisurato(path, self.pricing)
+            cambiato = fm.update() or cambiato
+        prima = self.righe.get(sid)
+        if prima and not cambiato and prima[0] == files:
+            return prima[1]
+        sess = new_session(sid)
+        for path in files:
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                mtime = 0.0
+            merge_record(sess, self.files[path].parser.snapshot(), mtime)
+        finalize(sess, self.pricing, self.idle_gap)
+        sess["flusso"] = cam_flusso.somma([self.files[p].parziale() for p in files])
+        self.righe[sid] = (files, sess)
+        return sess
+
+    def aggiorna(self) -> list[dict]:
+        """Un giro: le sessioni aperte adesso, dalla piu' recente."""
+        out, vivi = [], set()
+        for a in cam_flusso.sessioni_attive(self.base):
+            files = session_files_from_transcript(a["path"])
+            if not files:
+                continue
+            vivi.update(files)
+            sess = dict(self.sessione(a["session_id"], files))
+            sess["_status"] = a.get("stato")
+            sess["_nome"] = a.get("nome")
+            out.append(sess)
+        for path in [p for p in self.files if p not in vivi]:
+            del self.files[path]             # sessione chiusa: non serve piu'
+        aperte = {s["session_id"] for s in out}
+        for sid in [s for s in self.righe if s not in aperte]:
+            del self.righe[sid]
+        out.sort(key=lambda s: -(s.get("end") or 0))
+        return out
+
+
+def token_al_modello(tok: dict) -> int:
+    """Tutto quello che e' entrato nel modello: letto dalla cache o no."""
+    return (tok.get("input", 0) + tok.get("cache_read", 0)
+            + tok.get("cache_w5m", 0) + tok.get("cache_w1h", 0))
+
+
+def h_quota(v: float | None) -> str:
+    if v is None:
+        return DASH
+    if 0 < v < 0.01:
+        return "<1%"
+    return f"{v * 100:.0f}%"
+
+
+def flusso_json(sess: dict) -> dict:
+    f = dict(sess.get("flusso") or {})
+    return {
+        "session_id": sess["session_id"],
+        "progetto": sess.get("project"),
+        "titolo": sess.get("title") or sess.get("first_prompt"),
+        "stato": sess.get("_status"),
+        "token_al_modello": token_al_modello(sess["tokens"]),
+        "token_dal_modello": sess["tokens"].get("output", 0),
+        "flusso": f,
+    }
+
+
+def print_flusso(sess: dict) -> None:
+    """Il quadro di una sessione: cosa e' partito, cosa e' rimasto."""
+    f = sess["flusso"]
+    tok = sess["tokens"]
+    titolo = sess.get("title") or sess.get("first_prompt") or ""
+    print()
+    print(f"  {C.w(sess.get('project') or '?', C.BOLD)}  {C.w(sess['session_id'][:8], C.DIM)}"
+          f"  {trunc(titolo, 60)}")
+    print()
+    print(C.w("  AL MODELLO", C.BOLD))
+    print(f"  {C.w('richieste', C.DIM)} {f['richieste'] if f['misurato'] else DASH}"
+          f"   {C.w('token entrati', C.DIM)} {h_tokens(token_al_modello(tok))}"
+          f"   {C.w('dalla cache', C.DIM)} {h_quota(cache_hit(tok))}"
+          f"   {C.w('token usciti', C.DIM)} {h_tokens(tok.get('output', 0))}")
+    print()
+    tot = f["nuovo_totale"]
+    ok = f["misurato"]
+    righe = [[cam_flusso.ETICHETTA_ORIGINE[k],
+              h_byte(f["nuovo"][k]) if ok or k != "harness" else DASH,
+              h_quota(cam_flusso.quota(f["nuovo"][k], tot)) if ok else ""]
+             for k in cam_flusso.ORIGINI]
+    righe.append(["contenuto spedito per la prima volta",
+                  h_byte(tot) if ok else DASH, ""])
+    print_table(["DA DOVE VIENE", "TESTO", "QUOTA"], righe, ["<", ">", ">"],
+                {len(righe) - 1: (C.BOLD,)})
+    if ok:
+        if f["ripetizione"]:
+            print()
+            print(f"  {C.w('ogni messaggio è partito in media', C.DIM)} "
+                  f"{f['ripetizione']:.0f} "
+                  + C.w("volte: a ogni richiesta riparte la conversazione intera",
+                        C.DIM))
+        fonti = ", ".join(f"{n} {k}" for k, n in
+                          sorted(f["fonti"].items(), key=lambda kv: -kv[1]))
+        if len(f["fonti"]) > 1:
+            print(f"  {C.w('richieste per origine', C.DIM)} {fonti}")
+    else:
+        print()
+        print(C.w("  manca quello che Claude Code aggiunge per conto suo "
+                  "(istruzioni, strumenti, promemoria): questo transcript e' "
+                  "precedente alla 2.1.309, che le richieste non le registrava.",
+                  C.DIM))
+
+    print()
+    print(C.w("  SULLA MACCHINA", C.BOLD))
+    if not f["strumenti"]:
+        print(C.w("  nessuno strumento eseguito.", C.DIM))
+    else:
+        righe = [[trunc(s["nome"], 34), cam_flusso.ETICHETTA_DOVE[s["dove"]], s["n"],
+                  h_byte(s["prodotto"]), h_byte(s["inviato"]),
+                  h_byte(s["trattenuto"]) if s["trattenuto"] else DASH,
+                  h_dur(s["tempo"])]
+                 for s in f["strumenti"]]
+        print_table(["STRUMENTO", "DOVE GIRA", "N", "PRODOTTO", "AL MODELLO",
+                     "RESTA QUI", "TEMPO"], righe,
+                    ["<", "<", ">", ">", ">", ">", ">"])
+        print()
+        print(f"  {C.w('eseguiti sulla macchina', C.DIM)} {f['esecuzioni_locali']} su "
+              f"{f['esecuzioni']}"
+              f"   {C.w('prodotto', C.DIM)} {h_byte(f['prodotto_locale'])}"
+              f"   {C.w('girato al modello', C.DIM)} "
+              f"{h_quota(cam_flusso.quota(f['inviato_locale'], f['prodotto_locale']))}"
+              f"   {C.w('resta qui', C.DIM)} {h_byte(f['trattenuto'])}")
+    print()
+    print(C.w("  TEMPO", C.BOLD))
+    print(f"  {C.w('in attesa del modello', C.DIM)} "
+          f"{h_dur(f['tempo_modello']) if f['misurato'] else DASH}"
+          f"   {C.w('negli strumenti', C.DIM)} {h_dur(f['tempo_strumenti'])}"
+          f"   {C.w('(permessi da concedere compresi)', C.DIM)}")
+
+
+def view_flusso(base: str, pricing: dict, args) -> int:
+    oss = Osservatorio(base, pricing, args.idle_gap)
+    if args.session:
+        sid, files = find_session_files(base, args.session)
+        if not files:
+            warn(f"Sessione '{args.session}' non trovata")
+            return 2
+        sess = oss.sessione(sid or args.session, files)
+        if args.json:
+            print(json.dumps(flusso_json(sess), ensure_ascii=False, indent=2))
+        else:
+            print_flusso(sess)
+        return 0
+
+    try:
+        while True:
+            sessions = oss.aggiorna()
+            if args.project:
+                sessions = [s for s in sessions
+                            if sessione_nel_progetto(s, args.project)]
+            if args.json:
+                print(json.dumps([flusso_json(s) for s in sessions],
+                                 ensure_ascii=False, indent=2))
+                return 0
+            if args.watch:
+                os.system("cls" if os.name == "nt" else "clear")
+                print(C.w(f"  CAM {BULLET} sessioni attive   {dt.datetime.now():%H:%M:%S}"
+                          f"   agg. ogni {args.interval}s   Ctrl-C per uscire", C.BOLD))
+            print()
+            if not sessions:
+                print(C.w("  nessuna sessione di Claude Code aperta.", C.DIM))
+            righe, stili = [], {}
+            for i, s in enumerate(sessions):
+                f = s["flusso"]
+                ok = f["misurato"]
+                if s.get("_status") == "busy":
+                    stili[i] = (C.GREEN,)
+                righe.append([
+                    s["session_id"][:8],
+                    trunc(s.get("project") or "?", 18),
+                    {"busy": "lavora", "idle": "aspetta"}.get(s.get("_status"), DASH),
+                    f["richieste"] if ok else DASH,
+                    h_tokens(token_al_modello(s["tokens"])),
+                    h_tokens(s["tokens"].get("output", 0)),
+                    h_byte(f["nuovo_totale"]) if ok else DASH,
+                    h_quota(cam_flusso.quota(f["nuovo"]["strumenti"], f["nuovo_totale"]))
+                    if ok else DASH,
+                    f["esecuzioni_locali"],
+                    h_byte(f["trattenuto"]) if f["trattenuto"] else DASH,
+                    h_dur(f["tempo_modello"]) if ok else DASH,
+                    h_dur(f["tempo_strumenti"]),
+                ])
+            print_table(["SESSIONE", "PROGETTO", "STATO", "REQ", "AL MODELLO",
+                         "DAL MODELLO", "NUOVO", "DA STRUMENTI", "TOOL",
+                         "RESTA QUI", "T.MODELLO", "T.LOCALE"], righe,
+                        ["<", "<", "<", ">", ">", ">", ">", ">", ">", ">", ">", ">"],
+                        stili)
+            if sessions:
+                print()
+                print(C.w("  AL/DAL MODELLO in token, esatti. NUOVO e RESTA QUI in "
+                          "testo: cosa e' partito per la prima volta, e cosa gli "
+                          "strumenti hanno prodotto senza spedirlo.", C.DIM))
+                print(C.w("  --flusso --session <uuid> per il dettaglio di una.", C.DIM))
+            if not args.watch:
+                return 0
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print("\n" + C.w("  interrotto.", C.DIM))
+        return 0
+
+
 def build_json_payload(sessions: list[dict], pricing: dict, top: int = 0,
                        with_traces: bool = False) -> dict:
     """Payload machine-readable delle sessioni. Puro: non stampa nulla.
@@ -3213,6 +3508,7 @@ def build_parser() -> argparse.ArgumentParser:
   cam.py --traces               un turno per riga, di tutte le sessioni
   cam.py --traces --search bug  cerca nei prompt e negli strumenti
   cam.py --watch                cruscotto live sulla sessione attiva
+  cam.py --flusso               sessioni aperte: al modello o sulla macchina
   cam.py --by-month             consumo, quota pagata e resa per mese
   cam.py --json > report.json   output machine-readable
 
@@ -3260,6 +3556,11 @@ configurazione (abbonamento, listino, tema, default):
     p.add_argument("--finestra", type=int, metavar="GIORNI",
                    help="con --trend: giorni della finestra confrontata con la "
                         "precedente di pari lunghezza")
+    p.add_argument("--flusso", action="store_true",
+                   help="sessioni aperte adesso: quanto contenuto e' partito verso "
+                        "il modello e quanto lavoro e' rimasto sulla macchina "
+                        "(con --session: il dettaglio di una, anche chiusa; "
+                        "con --watch: resta e aggiorna)")
     p.add_argument("--by-project", action="store_true", help="aggrega per progetto invece che per sessione")
     p.add_argument("--by-month", action="store_true",
                    help="consumo, costo ipotetico e costo reale dell'abbonamento, mese per mese")
@@ -3347,6 +3648,9 @@ def main(argv=None) -> int:
     if args.interval is None:
         args.interval = float(d.get("watch_interval", 3.0))
     use_cache = not args.no_cache
+
+    if args.flusso:
+        return view_flusso(args.base, pricing, args)
 
     if args.watch:
         view_watch(args.base, pricing, args)

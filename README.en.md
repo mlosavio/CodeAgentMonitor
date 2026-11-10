@@ -87,6 +87,7 @@ python cam.py --by-month    :: consumption, spend and return per month
 python cam.py --by-project  :: totals per project
 python cam.py --traces      :: one turn per row, not one session
 python cam.py --trend       :: trends over time, with indicators
+python cam.py --flusso      :: open sessions: sent to the model vs done locally
 python cam.py --watch       :: live dashboard in the terminal
 python cam.py --json        :: machine-readable output
 ```
@@ -130,7 +131,7 @@ Same logic as the CLI — it imports it as a module — so the numbers match to 
 
 - **Tiles** across the top: what you have paid, what it would be worth at list price, active
   time, messages, the session in progress, and **how much of your plan limits you have used**.
-- Six tabs: **Progetti** (projects), **Sessioni** (sessions, with the title Claude Code assigns
+- Seven tabs (the seventh, **Attive**, is [model or machine](#model-or-machine)): **Progetti** (projects), **Sessioni** (sessions, with the title Claude Code assigns
   to the conversation), **[Traces](#turns)**, **[Andamento](#trends-and-indicators)** (trends),
   **Mesi** (months) and **Persone** (people). Columns sort on the underlying numbers, not the
   formatted strings, so `$2,055.7` does not end up below `$301.4`.
@@ -161,7 +162,7 @@ Same logic as the CLI — it imports it as a module — so the numbers match to 
 Look and feel: flat surfaces, the table drawn on a Canvas, light/dark theme following the system
 (title bar included), forced with `--light` / `--dark`.
 
-Options: `--theme auto|light|dark`, `--tab progetti|sessioni|traces|andamento|mesi|persone`,
+Options: `--theme auto|light|dark`, `--tab progetti|sessioni|traces|andamento|mesi|persone|attive`,
 `--live`, `--detail <uuid>`, `--auto-refresh MIN`, `--locale us|it`.
 
 The **Configura** button opens real settings, not the raw JSON: subscription, team, appearance,
@@ -452,6 +453,70 @@ you**. Search "reconciliation", narrow to one session, export that.
 Answers come from the text archive. Without it they come out `null`, and the command tells you
 **how many** turns came out empty: a dataset with half the answers missing is worse than no
 dataset, and must not look complete.
+
+---
+
+## Model or machine
+
+A Claude Code session is two kinds of work taking turns: **requests to the model**, which leave
+for Anthropic, and the work of the **harness** — Claude Code on your machine — which reads
+files, runs commands and applies edits. The **Attive** tab and `--flusso` answer one question
+about the sessions open right now: how much of what happens is sent to the model, and how much
+stays here?
+
+![The Attive tab: one row per open session](docs/attive.png)
+
+*The sessions in the screenshots are demo data: projects, titles and contents are made up.*
+
+Nothing to install or switch on in Claude Code: the panel reads the transcripts it already
+writes. You only need at least one Claude Code session open.
+
+```bat
+python cam_gui.py --tab attive             :: the desktop UI, straight on the tab
+python cam.py --flusso                     :: sessions open right now
+python cam.py --flusso --watch             :: stay and refresh
+python cam.py --flusso --session a1b2c3d4  :: one session in detail, even a closed one
+python cam.py --flusso --json              :: the same numbers, machine-readable
+```
+
+| column | what it is | unit |
+|---|---|---|
+| `REQ` | requests sent to the model, subagents included | exact count |
+| `AL MODELLO` / `DAL MODELLO` | tokens in (cache included) / tokens generated | tokens, exact |
+| `NUOVO` | content sent **for the first time** | characters of text |
+| `DA STRUMENTI` | share of the new content that is tool results | ratio |
+| `TOOL` | tools executed on the machine | count |
+| `RESTA QUI` | produced locally by tools and **not** sent | characters of text |
+| `T.MODELLO` / `T.LOCALE` | waiting for responses / time inside tools | time |
+
+In the UI the tab refreshes every 2 seconds while you look at it; `●` means the session is
+working, `○` that it is waiting for you. Hover a column header for what it measures, click it to
+sort, and double-click a session for its detail, which stays live too. The full column-by-column
+guide is in the [Italian README](README.md#modello-o-macchina).
+
+![Session detail: what was sent and what was executed](docs/attive-dettaglio.png)
+
+The detail view splits the new content by who produced it — typed by you, added by Claude
+Code, tool results, model output sent back as history — and lists each tool with where it runs
+(on the machine, MCP server, network, other agents) and how much of its output went to the
+model. `Read` forwards everything it reads; `Edit` handles the whole file locally and returns
+one line.
+
+**Where the numbers come from.** Since version **2.1.309** Claude Code records each request in
+the transcript (`api-request`, `api-request-blob`, `api-request-shape`), so how many requests,
+when, and with how many messages is read, not estimated. Local work comes from the tool-result
+rows: `toolUseResult` is what the tool produced on the machine, `message.content` is the part
+forwarded to the model.
+
+**The easy mistake.** A blob is written only for messages that are not already a conversation
+row. Counting blobs alone loses half the tool results; counting blobs and rows together doubles
+them. Both are counted, one block at a time, once. `test_flusso.py` builds those cases on
+purpose.
+
+**What it does not say.** Content is in characters, not tokens: the API gives exact tokens only
+as a per-request total. `T.LOCALE` includes time spent waiting for a permission. "MCP server"
+does not say whether the server is local or remote. Transcripts older than 2.1.309 show "—",
+not zero, for `REQ`, `NUOVO` and `T.MODELLO`. Nothing here is stored in the archive.
 
 ---
 
@@ -964,6 +1029,7 @@ Tests, all standard library:
 
 ```bat
 python test_archivio.py     python test_traces.py       python test_scenario.py
+python test_flusso.py
 python test_collector.py    python test_statistiche.py  python test_carico.py
 python test_copilot.py      python test_resilienza.py
 ```

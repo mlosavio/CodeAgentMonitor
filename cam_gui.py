@@ -47,6 +47,7 @@ import traceback
 from tkinter import filedialog, messagebox
 
 import cam  # NON chiamare mai cam.init_color(): inietterebbe ANSI
+import cam_flusso
 import cam_statistiche as cam_stat
 
 APP_TITLE = "CodeAgentMonitor"
@@ -1265,6 +1266,124 @@ TEAM_COLUMNS = [
 ]
 
 
+# Scheda Attive: una riga per sessione aperta adesso. Non dice quanto costa —
+# per quello ci sono le altre — ma dove va il lavoro: quanto parte verso il
+# modello e quanto resta sulla macchina. Le colonne di contenuto valgono «—»
+# quando il transcript non registra le richieste: lo zero direbbe che non e'
+# partito niente, ed e' falso.
+def _fl(r: dict) -> dict:
+    return r["flusso"]
+
+
+def quota_txt(parte: float, tutto: float) -> str:
+    v = cam_flusso.quota(parte, tutto)
+    if v is None:
+        return "—"
+    return "<1%" if 0 < v < 0.01 else f"{v * 100:.0f}%"
+
+
+def nome_sessione(r: dict) -> str:
+    titolo = r.get("title") or r.get("first_prompt") or (r.get("session_id") or "")[:8]
+    return f"{r.get('project') or '?'}  ·  {titolo}"
+
+
+ATTIVE_COLUMNS = [
+    ("title",  "Sessione",    300, "w", lambda r: nome_sessione(r).lower(),
+     lambda r: ("● " if r.get("_status") == "busy" else "○ ") + nome_sessione(r)),
+    ("req",    "Richieste",    80, "e", lambda r: _fl(r)["richieste"],
+     lambda r: _fl(r)["richieste"] if _fl(r)["misurato"] else "—"),
+    ("tin",    "Al modello",   90, "e", lambda r: cam.token_al_modello(r["tokens"]),
+     lambda r: Fmt.tokens(cam.token_al_modello(r["tokens"]))),
+    ("tout",   "Dal modello",  95, "e", lambda r: r["tokens"]["output"],
+     lambda r: Fmt.tokens(r["tokens"]["output"])),
+    ("nuovo",  "Nuovo",        85, "e", lambda r: _fl(r)["nuovo_totale"],
+     lambda r: cam.h_byte(_fl(r)["nuovo_totale"]) if _fl(r)["misurato"] else "—"),
+    ("strum",  "Da strumenti", 100, "e",
+     lambda r: cam_flusso.quota(_fl(r)["nuovo"]["strumenti"], _fl(r)["nuovo_totale"]) or 0,
+     lambda r: (quota_txt(_fl(r)["nuovo"]["strumenti"], _fl(r)["nuovo_totale"])
+                if _fl(r)["misurato"] else "—")),
+    ("tool",   "In locale",    75, "e", lambda r: _fl(r)["esecuzioni_locali"],
+     lambda r: _fl(r)["esecuzioni_locali"]),
+    ("tratt",  "Resta qui",    85, "e", lambda r: _fl(r)["trattenuto"],
+     lambda r: cam.h_byte(_fl(r)["trattenuto"]) if _fl(r)["trattenuto"] else "—"),
+    ("tmod",   "T. modello",   90, "e", lambda r: _fl(r)["tempo_modello"],
+     lambda r: Fmt.dur(_fl(r)["tempo_modello"]) if _fl(r)["misurato"] else "—"),
+    ("tloc",   "T. locale",    80, "e", lambda r: _fl(r)["tempo_strumenti"],
+     lambda r: Fmt.dur(_fl(r)["tempo_strumenti"])),
+    ("last",   "Ultima",       75, "e", lambda r: r["end"] or 0,
+     lambda r: Fmt.ago(r["end"])),
+]
+
+AIUTO_ATTIVE = {
+    "title": "Le sessioni di Claude Code aperte adesso su questa macchina.\n\n"
+             "● = sta lavorando   ○ = aspetta te.",
+    "req": "Richieste partite verso il modello, subagent compresi.\n\n"
+           "Ogni richiesta porta con sé la conversazione intera: per questo i "
+           "token entrati crescono molto più in fretta del contenuto nuovo.",
+    "tin": "Token entrati nel modello in tutte le richieste: input, più quello "
+           "che è stato riletto dalla cache o scritto in cache. È il numero "
+           "esatto, dalla risposta dell'API.",
+    "tout": "Token generati dal modello: risposte, ragionamento e chiamate "
+            "agli strumenti.",
+    "nuovo": "Testo spedito al modello per la prima volta: i tuoi messaggi, i "
+             "risultati degli strumenti, le istruzioni e i promemoria di "
+             "Claude Code, e le risposte del modello che tornano indietro come "
+             "storia.\n\nÈ in caratteri, non in token: dice di che cosa è "
+             "fatto quello che parte, non quanto costa.",
+    "strum": "Quanta parte del contenuto nuovo sono risultati di strumenti: "
+             "file letti, output di comandi.\n\nÈ quasi sempre la fetta più "
+             "grossa — è la macchina, non tu, a riempire il contesto.",
+    "tool": "Strumenti eseguiti sulla macchina da Claude Code: letture, "
+            "comandi, modifiche, ricerche.\n\nNon contano quelli che girano "
+            "altrove (server MCP, ricerche in rete, altri agenti).",
+    "tratt": "Quello che gli strumenti hanno prodotto in locale senza "
+             "spedirlo al modello.\n\nUna modifica legge e riscrive il file "
+             "intero sulla macchina, ma al modello torna una riga di conferma; "
+             "un output troppo lungo resta su disco e ne parte un'anteprima.",
+    "tmod": "Tempo passato ad aspettare le risposte del modello: dalla "
+            "partenza di ogni richiesta alla fine della sua risposta.\n\n"
+            "Con dei subagent in parallelo può superare il tempo di orologio.",
+    "tloc": "Tempo passato negli strumenti, contando una volta sola quelli "
+            "lanciati insieme.\n\nComprende l'attesa di un permesso da "
+            "concedere: il transcript non la distingue dall'esecuzione.",
+    "last": "Ultima attività.",
+}
+
+ORIGINE_COLUMNS = [
+    ("origine", "Da dove viene", 260, "w", lambda r: r["etichetta"], lambda r: r["etichetta"]),
+    ("testo",   "Testo",         100, "e", lambda r: r["n"], lambda r: r["testo"]),
+    ("share",   "Quota",         260, "e", lambda r: r["n"], lambda r: ""),
+]
+
+STRUMENTO_COLUMNS = [
+    ("nome",   "Strumento",   260, "w", lambda r: r["nome"].lower(), lambda r: r["nome"]),
+    ("dove",   "Dove gira",   120, "w", lambda r: r["dove"],
+     lambda r: cam_flusso.ETICHETTA_DOVE[r["dove"]]),
+    ("n",      "Volte",        65, "e", lambda r: r["n"], lambda r: r["n"]),
+    ("prod",   "Prodotto",     95, "e", lambda r: r["prodotto"],
+     lambda r: cam.h_byte(r["prodotto"])),
+    ("inv",    "Al modello",   95, "e", lambda r: r["inviato"],
+     lambda r: cam.h_byte(r["inviato"])),
+    ("tratt",  "Resta qui",    95, "e", lambda r: r["trattenuto"],
+     lambda r: cam.h_byte(r["trattenuto"]) if r["trattenuto"] else "—"),
+    ("tempo",  "Tempo",        80, "e", lambda r: r["tempo"], lambda r: Fmt.dur(r["tempo"])),
+    ("err",    "Errori",       65, "e", lambda r: r["errori"],
+     lambda r: r["errori"] or "—"),
+]
+
+AIUTO_STRUMENTI = {
+    "dove": "Sulla macchina: lo esegue Claude Code qui.\n"
+            "Server MCP: lo esegue un server esterno a Claude Code, locale o remoto.\n"
+            "In rete: ricerche e pagine web.\n"
+            "Altri agenti: lavoro delegato, che è a sua volta fatto di richieste "
+            "al modello.",
+    "prod": "Quanto testo lo strumento ha prodotto o maneggiato in locale.",
+    "inv": "Quanta parte ne è stata girata al modello come risultato.",
+    "tratt": AIUTO_ATTIVE["tratt"],
+    "tempo": "Dalla chiamata al risultato, attese di permesso comprese.",
+}
+
+
 # Come si chiamano a schermo i due casi anomali. I nomi tecnici stanno in
 # cam_collector.ANOMALIE; qui c'e' la frase che si legge nel pannello.
 # Corte apposta: stanno su una riga gia' piena, accanto al resto del riepilogo.
@@ -1429,14 +1548,16 @@ def build_help(pricing: dict, totals: dict) -> dict:
 
 # Le schede, in ordine. Il numero e' quello che il selettore usa: tenerlo qui
 # evita che aggiungerne una in mezzo lasci indietro un indice scritto a mano.
-TABS = ["progetti", "sessioni", "traces", "andamento", "mesi", "persone"]
+TABS = ["progetti", "sessioni", "traces", "andamento", "mesi", "persone", "attive"]
 TAB_BY_NAME = {name: i for i, name in enumerate(TABS)}
 TAB_TRACES = TAB_BY_NAME["traces"]
 TAB_ANDAMENTO = TAB_BY_NAME["andamento"]
 TAB_PERSONE = TAB_BY_NAME["persone"]
+TAB_ATTIVE = TAB_BY_NAME["attive"]
 # Schede che scrivono da sole la riga di suggerimento: la legenda generale non
 # deve sovrascriverle.
-TABS_WITH_OWN_HINT = (TAB_BY_NAME["sessioni"], TAB_TRACES, TAB_ANDAMENTO, TAB_PERSONE)
+TABS_WITH_OWN_HINT = (TAB_BY_NAME["sessioni"], TAB_TRACES, TAB_ANDAMENTO, TAB_PERSONE,
+                      TAB_ATTIVE)
 
 PERIODS = [("Sempre", None), ("Oggi", "oggi"), ("7 giorni", "7d"),
            ("30 giorni", "30d"), ("90 giorni", "90d")]
@@ -2773,6 +2894,157 @@ PERSON_PROJECT_COLUMNS = [
 ]
 
 
+class AttivePanel(tk.Frame):
+    """Scheda Attive: le sessioni aperte adesso, e dove va il loro lavoro."""
+
+    def __init__(self, master, app):
+        super().__init__(master, bg=app.t["page"])
+        self.app = app
+        self.tabella = DataTable(self, app.t, ATTIVE_COLUMNS,
+                                 on_activate=app.open_flusso)
+        self.tabella.help = AIUTO_ATTIVE
+        self.tabella.pack(fill="both", expand=True)
+        self.tabella.set_placeholder("leggo le sessioni aperte…")
+
+    def set_righe(self, righe) -> None:
+        if righe is None:
+            self.tabella.set_placeholder("lettura delle sessioni fallita")
+        elif not righe:
+            self.tabella.set_placeholder("nessuna sessione di Claude Code aperta")
+        else:
+            # set_rows azzera la selezione: qui arriva ogni due secondi, e
+            # perderla a ogni giro renderebbe impossibile copiare una riga.
+            scelta = self.tabella.sel_index
+            self.tabella.set_rows(righe)
+            if 0 <= scelta < len(righe):
+                self.tabella.sel_index = scelta
+                self.tabella._redraw()
+
+    def selected_tsv(self) -> str:
+        return self.tabella.selected_tsv()
+
+
+class FlussoWindow(tk.Toplevel):
+    """Una sessione vista per dove va il lavoro: al modello, o sulla macchina.
+
+    Resta aggiornata finche' e' aperta: la sessione che descrive sta lavorando.
+    """
+
+    def __init__(self, app, sess: dict):
+        super().__init__(app.root, bg=app.t["page"])
+        self.app = app
+        self.t = app.t
+        self.sid = sess["session_id"]
+        self.title(f"{APP_TITLE} — {sess.get('project') or '?'} · {self.sid[:8]}")
+        self.geometry("1040x700")
+        set_titlebar(self, self.t.mode == "dark")
+
+        head = tk.Frame(self, bg=self.t["page"])
+        head.pack(fill="x", padx=18, pady=(16, 10))
+        self.l_title = tk.Label(head, text="", bg=self.t["page"], fg=self.t["ink"],
+                                font=self.t.f_title, anchor="w", justify="left",
+                                wraplength=980)
+        self.l_title.pack(fill="x")
+        self.l_meta = tk.Label(head, text="", bg=self.t["page"], fg=self.t["ink2"],
+                               font=self.t.f_small, anchor="w", justify="left")
+        self.l_meta.pack(fill="x", pady=(3, 0))
+
+        tiles = tk.Frame(self, bg=self.t["page"])
+        tiles.pack(fill="x", padx=18)
+        self.tiles = {}
+        for key, label in (("req", "Richieste"), ("tin", "Al modello"),
+                           ("nuovo", "Contenuto nuovo"), ("loc", "In locale"),
+                           ("tempo", "Attesa del modello")):
+            tile = StatTile(tiles, self.t, label, width=190)
+            tile.pack(side="left", padx=(0, 10))
+            self.tiles[key] = tile
+
+        def titolo(testo):
+            tk.Label(self, text=testo.upper(), bg=self.t["page"], fg=self.t["muted"],
+                     font=self.t.f_head, anchor="w").pack(fill="x", padx=18,
+                                                          pady=(14, 6))
+
+        titolo("Cosa è partito verso il modello")
+        self.origini = DataTable(self, self.t, ORIGINE_COLUMNS,
+                                 share_key=lambda r: r["n"])
+        self.origini.help = {"testo": AIUTO_ATTIVE["nuovo"]}
+        self.origini.configure(height=self.origini.head_h
+                               + self.origini.row_h_base * len(cam_flusso.ORIGINI) + 6)
+        self.origini.pack_propagate(False)
+        self.origini.pack(fill="x", padx=18)
+
+        titolo("Cosa è stato eseguito, e dove")
+        self.strumenti = DataTable(self, self.t, STRUMENTO_COLUMNS,
+                                   share_key=None)
+        self.strumenti.help = AIUTO_STRUMENTI
+        # La nota si impacchetta prima della tabella, dal basso: la tabella
+        # chiede tutta l'altezza che puo' e altrimenti la spingerebbe fuori.
+        self.l_nota = tk.Label(self, text="", bg=self.t["page"], fg=self.t["muted"],
+                               font=self.t.f_small, anchor="w", justify="left",
+                               wraplength=1000)
+        self.l_nota.pack(side="bottom", fill="x", padx=18, pady=(6, 12))
+        self.strumenti.pack(fill="both", expand=True, padx=18)
+
+        self.protocol("WM_DELETE_WINDOW", self._chiudi)
+        app.flusso_windows[self.sid] = self
+        self.set_data(sess)
+
+    def _chiudi(self):
+        self.app.flusso_windows.pop(self.sid, None)
+        self.destroy()
+        self.app._attive_sync()
+
+    def set_data(self, sess: dict) -> None:
+        f = sess["flusso"]
+        tok = sess["tokens"]
+        ok = f["misurato"]
+        stato = {"busy": "sta lavorando", "idle": "aspetta te"}.get(sess.get("_status"))
+        self.l_title.config(text=sess.get("title") or sess.get("first_prompt")
+                            or self.sid[:8])
+        self.l_meta.config(text="  ·  ".join(x for x in (
+            sess.get("project"), stato, f"ultima attività {Fmt.ago(sess.get('end'))}",
+            f"{sess.get('subagent_files') or 0} subagent"
+            if sess.get("subagent_files") else None) if x))
+
+        self.tiles["req"].set(str(f["richieste"]) if ok else "—",
+                              f"ogni messaggio partito {f['ripetizione']:.0f} volte"
+                              if f.get("ripetizione") else "")
+        self.tiles["tin"].set(Fmt.tokens(cam.token_al_modello(tok)),
+                              f"{pct_txt(cam.cache_hit(tok))} dalla cache · "
+                              f"{Fmt.tokens(tok['output'])} usciti")
+        self.tiles["nuovo"].set(cam.h_byte(f["nuovo_totale"]) if ok else "—",
+                                f"{quota_txt(f['nuovo']['strumenti'], f['nuovo_totale'])} "
+                                "da strumenti" if ok else "richieste non registrate")
+        self.tiles["loc"].set(f"{f['esecuzioni_locali']}",
+                              f"resta qui {cam.h_byte(f['trattenuto'])}")
+        self.tiles["tempo"].set(Fmt.dur(f["tempo_modello"]) if ok else "—",
+                                f"negli strumenti {Fmt.dur(f['tempo_strumenti'])}")
+
+        self.origini.set_rows([
+            {"etichetta": (cam_flusso.ETICHETTA_ORIGINE[k][:1].upper()
+                           + cam_flusso.ETICHETTA_ORIGINE[k][1:]),
+             "n": f["nuovo"][k],
+             "testo": cam.h_byte(f["nuovo"][k]) if ok or k != "harness" else "—"}
+            for k in cam_flusso.ORIGINI])
+        if f["strumenti"]:
+            self.strumenti.set_rows(f["strumenti"], {
+                "nome": f"{len(f['strumenti'])} strumenti",
+                "n": str(f["esecuzioni"]),
+                "prod": cam.h_byte(sum(s["prodotto"] for s in f["strumenti"])),
+                "inv": cam.h_byte(sum(s["inviato"] for s in f["strumenti"])),
+                "tratt": cam.h_byte(sum(s["trattenuto"] for s in f["strumenti"])),
+            })
+        else:
+            self.strumenti.set_placeholder("nessuno strumento eseguito finora")
+        self.l_nota.config(text=(
+            "Token esatti, dalle risposte dell'API. Il contenuto è in caratteri di "
+            "testo: dice di che cosa è fatto quello che parte."
+            if ok else
+            "Questo transcript è di un Claude Code precedente alla 2.1.309, che non "
+            "registrava le richieste: manca quello che Claude Code aggiunge per conto "
+            "suo (istruzioni, strumenti, promemoria) e il tempo di attesa del modello."))
+
+
 class PersonWindow(tk.Toplevel):
     """Su cosa ha lavorato una postazione: la vista per il ribaltamento.
 
@@ -3252,6 +3524,16 @@ class App:
         self.trace_session: str | None = None
         self.live_stop: threading.Event | None = None
         self.live_gen = 0
+        # Scheda Attive: un suo giro, acceso solo mentre la si guarda o finche'
+        # resta aperto il dettaglio di una sessione. L'osservatorio sopravvive
+        # agli spegnimenti: riaccendere non deve rileggere transcript da decine
+        # di MB che non sono cambiati.
+        self.attive_stop: threading.Event | None = None
+        self.attive_gen = 0
+        self.attive_hint = ""
+        self.oss = None
+        self._oss_lock = threading.Lock()
+        self.flusso_windows: dict = {}
         self.period_spec = None
         self.project_filter = ""
         self.pending_detail = getattr(args, "detail", None)
@@ -3424,7 +3706,8 @@ class App:
         bar = tk.Frame(root, bg=t["page"])
         bar.pack(fill="x", padx=20, pady=(10, 8))
         self.segmented = Segmented(bar, t, ["Progetti", "Sessioni", "Traces",
-                                            "Andamento", "Mesi", "Persone"],
+                                            "Andamento", "Mesi", "Persone",
+                                            "Attive"],
                                    self._on_tab)
         self.segmented.pack(side="left")
         # Chip di drill-down: si accende quando si arriva ai turni da una
@@ -3456,11 +3739,13 @@ class App:
                                     share_key=lambda r: r["hyp"])
         self.team_panel = TeamPanel(holder, self)
         self.team_tbl = self.team_panel.tabella
+        self.attive_panel = AttivePanel(holder, self)
         self.holder = holder
         self.projects.pack(fill="both", expand=True)
         self.current_table = self.projects
         self._tables = (self.projects, self.sessions_tbl, self.traces_tbl,
-                        self.trend, self.months_tbl, self.team_panel)
+                        self.trend, self.months_tbl, self.team_panel,
+                        self.attive_panel)
         assert len(self._tables) == len(self.segmented.buttons), (
             "segmenti e tabelle non coincidono: "
             f"{len(self.segmented.buttons)} contro {len(self._tables)}")
@@ -3488,10 +3773,13 @@ class App:
                     "che salga  ·  «Tabella» per gli stessi numeri in righe")
         elif index == TAB_PERSONE:
             hint = self.team_hint or "doppio click su una postazione per i suoi progetti"
+        elif index == TAB_ATTIVE:
+            hint = self.attive_hint or "sessioni aperte adesso su questa macchina"
         else:
             hint = getattr(self, "legend", "")
         self._sync_chip(index)
         self.set_hint(hint)
+        self._attive_sync()
 
     def set_hint(self, testo: str) -> None:
         """La riga di note in alto a destra, tagliata per stare nello spazio.
@@ -3682,6 +3970,65 @@ class App:
             if stop.wait(LIVE_INTERVAL):
                 return
 
+    # -- sessioni attive: al modello o sulla macchina ------------------------- #
+
+    def _attive_sync(self):
+        """Accende o spegne il giro delle sessioni attive, secondo chi guarda."""
+        serve = (self.segmented.index == TAB_ATTIVE) or bool(self.flusso_windows)
+        if serve and self.attive_stop is None:
+            self.attive_gen += 1
+            self.attive_stop = threading.Event()
+            threading.Thread(target=self._attive_worker,
+                             args=(self.attive_gen, self.attive_stop),
+                             daemon=True).start()
+        elif not serve and self.attive_stop is not None:
+            self.attive_stop.set()
+            self.attive_stop = None
+
+    def _attive_worker(self, gen, stop):
+        while True:
+            try:
+                # Il lucchetto serve a un caso solo: spegni e riaccendi in
+                # fretta, e per un giro i thread sono due sullo stesso stato.
+                with self._oss_lock:
+                    oss = self.oss
+                    if (oss is None or oss.pricing is not self.pricing
+                            or oss.idle_gap != self.idle_gap):
+                        oss = self.oss = cam.Osservatorio(self.base, self.pricing,
+                                                          self.idle_gap)
+                    righe = oss.aggiorna()
+                self.q.put(("attive", gen, righe))
+            except Exception:
+                self.q.put(("attive", gen, None))
+            if stop.wait(LIVE_INTERVAL):
+                return
+
+    def _render_attive(self, righe):
+        self.attive_panel.set_righe(righe)
+        for s in righe or []:
+            finestra = self.flusso_windows.get(s["session_id"])
+            if finestra is not None:
+                finestra.set_data(s)
+        if righe:
+            lavorano = sum(1 for s in righe if s.get("_status") == "busy")
+            self.attive_hint = (
+                f"{len(righe)} aperte · {lavorano} al lavoro  ·  doppio click per "
+                "vedere cosa parte e cosa resta  ·  passa il mouse sulle intestazioni")
+        else:
+            self.attive_hint = ""
+        if self.segmented.index == TAB_ATTIVE:
+            self.set_hint(self.attive_hint
+                          or "sessioni aperte adesso su questa macchina")
+
+    def open_flusso(self, sess):
+        """Doppio click su una sessione attiva: il dettaglio, che resta vivo."""
+        finestra = self.flusso_windows.get(sess["session_id"])
+        if finestra is not None:
+            finestra.lift()
+            return
+        FlussoWindow(self, sess)
+        self._attive_sync()
+
     # -- coda -> UI (solo thread principale) --------------------------------- #
 
     def _pump(self):
@@ -3759,6 +4106,8 @@ class App:
                 self.l_status.config(text=("⚠ " if level == "warn" else "") + msg)
             elif kind == "live" and gen == self.live_gen and self.btn_live.active:
                 self._render_live(payload)
+            elif kind == "attive" and gen == self.attive_gen and self.attive_stop:
+                self._render_attive(payload)
         self._pump_job = self.root.after(PUMP_MS, self._pump)
 
     def _cancel_jobs(self):
@@ -4152,6 +4501,8 @@ class App:
         self._cancel_jobs()
         if self.live_stop:
             self.live_stop.set()
+        if self.attive_stop:
+            self.attive_stop.set()
         cam.LOG_HOOK = None
         self.root.destroy()
 
@@ -4348,6 +4699,8 @@ class App:
         self._cancel_jobs()
         if self.live_stop:
             self.live_stop.set()
+        if self.attive_stop:
+            self.attive_stop.set()
         cam.LOG_HOOK = None
         self._save_state()
         self.root.destroy()
