@@ -66,6 +66,17 @@ ETICHETTA_DOVE = {
     "agenti": "altri agenti",
 }
 _RETE = {"WebSearch", "WebFetch"}
+# Strumenti che girano al modello il contenuto di un file cosi' com'e'.
+_LETTURE = {"Read", "NotebookRead"}
+
+# Cartelle che non sono "i dati su cui si lavora": storia del controllo di
+# versione, dipendenze scaricate, bytecode. Contarle farebbe sembrare piccola
+# qualunque quota — un .git da 200 MB accanto a 5 MB di sorgenti.
+CARTELLE_ESCLUSE = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv",
+                    "venv", ".mypy_cache", ".pytest_cache", ".tox", "~BROMIUM"}
+# Oltre questo numero di file si smette di contare e lo si dichiara: una
+# sessione aperta sulla home non deve tenere il disco occupato per minuti.
+LIMITE_FILE = 200_000
 _AGENTI = {"Agent", "Task", "Workflow", "SendMessage"}
 
 # Testo che Claude Code scrive in un messaggio "user" senza che l'utente
@@ -204,6 +215,7 @@ class Flusso:
         self.resi: set[str] = set()
         self.strumenti: dict[str, dict] = {}
         self.intervalli: list[tuple[float, float]] = []
+        self.letti: dict[str, int] = {}           # file -> caratteri del file spediti
 
     # -- ingestione --------------------------------------------------------- #
 
@@ -278,7 +290,10 @@ class Flusso:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 bid = block.get("id")
                 if bid and bid not in self.usi:
-                    self.usi[bid] = (block.get("name") or "?", ts)
+                    args = block.get("input")
+                    file = args.get("file_path") if isinstance(args, dict) else None
+                    self.usi[bid] = (block.get("name") or "?", ts,
+                                     file if isinstance(file, str) else None)
 
     def _risultati(self, row: dict) -> None:
         content = (row.get("message") or {}).get("content")
@@ -295,8 +310,10 @@ class Flusso:
             if not bid or bid in self.resi:
                 continue                   # storia riemessa: gia' contato
             self.resi.add(bid)
-            nome, partenza = self.usi.get(bid, ("?", None))
+            nome, partenza, file = self.usi.get(bid, ("?", None, None))
             inviato = peso(block.get("content"))
+            if nome in _LETTURE and block.get("is_error") is not True:
+                self._letto(file, locale if len(blocchi) == 1 else None, inviato)
             # Senza toolUseResult (versioni vecchie, permesso negato) in locale
             # non risulta niente di piu' di quello che e' partito.
             prodotto = inviato
@@ -318,6 +335,24 @@ class Flusso:
                 if dove_gira(nome) != "agenti":
                     self.intervalli.append((partenza, ts))
 
+    def _letto(self, file, locale, inviato: int) -> None:
+        """Segna quanto di un file e' partito con una lettura.
+
+        Si misura il contenuto del file, non il risultato spedito: quello
+        porta in piu' i numeri di riga, e un'immagine viaggia in base64, che
+        e' un terzo piu' lunga dei byte che rappresenta.
+        """
+        n = inviato
+        dati = locale.get("file") if isinstance(locale, dict) else None
+        if isinstance(dati, dict):
+            file = file or dati.get("filePath")
+            if isinstance(dati.get("content"), str):
+                n = len(dati["content"])
+            elif isinstance(dati.get("base64"), str):
+                n = len(dati["base64"]) * 3 // 4
+        if isinstance(file, str) and file:
+            self.letti[file] = self.letti.get(file, 0) + n
+
     # -- risultato ---------------------------------------------------------- #
 
     def snapshot(self) -> dict:
@@ -333,6 +368,7 @@ class Flusso:
                                  if a is not None and b is not None and b >= a),
             "strumenti": {n: dict(s) for n, s in self.strumenti.items()},
             "intervalli": list(self.intervalli),
+            "letti": dict(self.letti),
         }
 
 
@@ -365,6 +401,7 @@ def somma(parziali: list[dict]) -> dict:
     fonti: collections.Counter = collections.Counter()
     strumenti: dict[str, dict] = {}
     intervalli: list = []
+    letti: dict[str, int] = {}
     out = {"richieste": 0, "impianto": 0, "msg_spediti": 0, "msg_unici": 0,
            "tempo_modello": 0.0}
     for p in parziali:
@@ -374,6 +411,8 @@ def somma(parziali: list[dict]) -> dict:
             nuovo[k] += (p.get("nuovo") or {}).get(k, 0)
         fonti.update(p.get("fonti") or {})
         intervalli.extend(p.get("intervalli") or [])
+        for file, n in (p.get("letti") or {}).items():
+            letti[file] = letti.get(file, 0) + n
         for nome, s in (p.get("strumenti") or {}).items():
             d = strumenti.setdefault(nome, {
                 "n": 0, "prodotto": 0, "inviato": 0, "tempo": 0.0, "errori": 0})
@@ -408,8 +447,97 @@ def somma(parziali: list[dict]) -> dict:
         "inviato_locale": loc["inviato"],
         "trattenuto": max(0, loc["prodotto"] - loc["inviato"]),
         "tempo_strumenti": unione(intervalli),
+        "letti": letti,
     })
+    confronta(out, None)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Quanta parte della cartella di lavoro e' partita
+# --------------------------------------------------------------------------- #
+
+
+def misura_cartella(path: str, limite: int = LIMITE_FILE) -> dict | None:
+    """Quanto pesa la cartella di lavoro: {path, byte, file, parziale}.
+
+    Conta i file come stanno sul disco, tolte le cartelle che non sono dati di
+    lavoro (`CARTELLE_ESCLUSE`). None se la cartella non c'e' piu'.
+    """
+    if not path or not os.path.isdir(path):
+        return None
+    byte = file = 0
+    parziale = False
+    for radice, cartelle, nomi in os.walk(path):
+        cartelle[:] = [c for c in cartelle if c not in CARTELLE_ESCLUSE]
+        for nome in nomi:
+            try:
+                byte += os.path.getsize(os.path.join(radice, nome))
+            except OSError:
+                continue
+            file += 1
+        if file >= limite:
+            parziale = True
+            break
+    return {"path": path, "byte": byte, "file": file, "parziale": parziale}
+
+
+def _canonico(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+
+def confronta(f: dict, cartella: dict | None) -> dict:
+    """Mette il flusso di una sessione accanto alla sua cartella di lavoro.
+
+    Due rapporti, che rispondono a due domande diverse:
+
+    * `quota_cartella` — dati locali spediti / peso della cartella. E' il
+      conto semplice: «lavoro su 5 MB, ne e' partito 1, il 20%». Al numeratore
+      c'e' tutto quello che gli strumenti locali hanno girato al modello,
+      output dei comandi compresi; un file letto due volte conta due volte,
+      quindi puo' superare il 100%.
+    * `copertura` — quanta parte della cartella e' partita almeno una volta,
+      contando ogni file per quello che e' stato letto e mai piu' del suo
+      peso. Non supera il 100%, ma vede solo le letture dirette: quello che
+      esce con un `cat` dentro un comando non ha un file a cui attribuirlo.
+
+    Senza cartella (None) i rapporti restano None: non si sa, non e' zero.
+    """
+    radice = _canonico(cartella["path"]) if cartella else None
+    righe = []
+    for file, n in (f.get("letti") or {}).items():
+        canonico = _canonico(file)
+        dentro = bool(radice) and (canonico == radice
+                                   or canonico.startswith(radice.rstrip("\\/") + os.sep))
+        try:
+            peso_file = os.path.getsize(file)
+        except OSError:
+            peso_file = None                       # cancellato o spostato dopo
+        righe.append({
+            "file": file,
+            "nome": os.path.relpath(file, cartella["path"]) if dentro else file,
+            "dentro": dentro,
+            "letto": n,
+            "peso": peso_file,
+            # una volta sola: riletture e letture a pezzi non fanno piu' del file
+            "unico": min(n, peso_file) if peso_file is not None else n,
+        })
+    righe.sort(key=lambda r: (-r["letto"], r["nome"]))
+    dentro = [r for r in righe if r["dentro"]]
+    fuori = [r for r in righe if not r["dentro"]]
+    byte = cartella["byte"] if cartella else 0
+    f.update({
+        "cartella": cartella,
+        "file_letti": righe,
+        "file_dentro": len(dentro),
+        "byte_dentro": sum(r["unico"] for r in dentro),
+        "file_fuori": len(fuori),
+        "byte_fuori": sum(r["unico"] for r in fuori),
+        "quota_cartella": quota(f.get("inviato_locale", 0), byte) if cartella else None,
+        "copertura": (quota(sum(r["unico"] for r in dentro), byte)
+                      if cartella else None),
+    })
+    return f
 
 
 def quota(parte: float, tutto: float) -> float | None:

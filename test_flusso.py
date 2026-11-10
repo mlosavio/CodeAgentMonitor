@@ -357,13 +357,83 @@ def prova_osservatorio(base):
     verifica("e nessun file tenuto aperto", oss.files, {})
 
 
+def prova_cartella(base):
+    """Quanta parte della cartella di lavoro e' partita: due rapporti, non uno."""
+    print("\nLa cartella di lavoro")
+    lavoro = os.path.join(os.path.dirname(base), "lavoro")
+    fuori = os.path.join(os.path.dirname(base), "altrove")
+    for cartella in (lavoro, os.path.join(lavoro, "src"), os.path.join(lavoro, ".git"),
+                     os.path.join(lavoro, "node_modules", "x"), fuori):
+        os.makedirs(cartella)
+
+    def file(path, n):
+        with open(path, "w", encoding="ascii", newline="") as fh:
+            fh.write("d" * n)
+        return path
+
+    a = file(os.path.join(lavoro, "a.txt"), 1000)
+    b = file(os.path.join(lavoro, "src", "b.py"), 3000)
+    file(os.path.join(lavoro, "mai_letto.csv"), 6000)
+    file(os.path.join(lavoro, ".git", "oggetti"), 50_000)           # non sono dati di lavoro
+    file(os.path.join(lavoro, "node_modules", "x", "lib.js"), 70_000)
+    esterno = file(os.path.join(fuori, "note.md"), 400)
+    sparito = os.path.join(lavoro, "sparito.txt")
+
+    cart = F.misura_cartella(lavoro)
+    verifica("peso: .git e node_modules esclusi", (cart["byte"], cart["file"]), (10_000, 3))
+    vero("non parziale", not cart["parziale"])
+    verifica("cartella che non c'e'", F.misura_cartella(os.path.join(lavoro, "no")), None)
+    vero("oltre il limite: parziale", F.misura_cartella(lavoro, limite=1)["parziale"])
+
+    def leggi(sec, tid, path, contenuto, inviato=None):
+        # al modello il file arriva coi numeri di riga: piu' lungo del contenuto
+        return [assistente(sec, "R1", [uso(tid, "Read", {"file_path": path})]),
+                utente(sec + 1, [reso(tid, "n" * (inviato or contenuto + 50))],
+                       locale={"type": "text", "file": {"filePath": path,
+                                                         "content": "d" * contenuto}})]
+
+    righe = [shape(), richiesta(0, "R1", ["B1"])]
+    righe += leggi(1, "T1", a, 1000)
+    righe += leggi(3, "T2", a, 1000)                  # riletto per intero
+    righe += leggi(5, "T3", b, 600)                   # un pezzo
+    righe += leggi(7, "T4", esterno, 400)
+    righe += leggi(9, "T5", sparito, 200)
+    righe += [assistente(11, "R1", [uso("T6", "Bash")]),
+              utente(12, [reso("T6", "o" * 500)], locale={"stdout": "o" * 500}),
+              # una lettura fallita non ha spedito il file
+              assistente(13, "R1", [uso("T7", "Read", {"file_path": b})]),
+              utente(14, [reso("T7", "file non trovato", errore=True)])]
+    f = F.confronta(misura(righe), cart)
+
+    per = {os.path.basename(r["file"]): r for r in f["file_letti"]}
+    verifica("riletto: letto somma, unico no", (per["a.txt"]["letto"], per["a.txt"]["unico"]),
+             (2000, 1000))
+    verifica("letto a pezzi: quanto e' partito", per["b.py"]["unico"], 600)
+    verifica("si misura il file, non i numeri di riga", per["note.md"]["letto"], 400)
+    verifica("percorso relativo alla cartella", per["b.py"]["nome"], os.path.join("src", "b.py"))
+    verifica("dentro e fuori", (per["b.py"]["dentro"], per["note.md"]["dentro"]), (True, False))
+    verifica("file sparito: peso ignoto, non zero", per["sparito.txt"]["peso"], None)
+    verifica("file della cartella spediti", f["file_dentro"], 3)
+    verifica("file fuori", (f["file_fuori"], f["byte_fuori"]), (1, 400))
+    verifica("copertura: ogni file una volta", f["copertura"], (1000 + 600 + 200) / 10_000)
+    # 5 letture da contenuto+50, il comando da 500 e l'errore da 16
+    inviato = 2 * 1050 + 650 + 450 + 250 + 500 + 16
+    verifica("dati locali inviati", f["inviato_locale"], inviato)
+    verifica("quota: inviati / cartella", f["quota_cartella"], inviato / 10_000)
+    # la stessa sessione senza cartella: i rapporti non esistono, i file si'
+    f2 = misura(righe)
+    verifica("senza cartella: quote assenti", (f2["quota_cartella"], f2["copertura"]),
+             (None, None))
+    verifica("senza cartella: i file restano", len(f2["file_letti"]), 4)
+
+
 def main() -> int:
     print("Prove sul flusso")
     print("=" * 76)
     for prova in (prova_origini, prova_doppioni, prova_locale, prova_senza_richieste,
                   prova_subagent, prova_unione):
         prova()
-    for prova in (prova_attive, prova_osservatorio):
+    for prova in (prova_attive, prova_osservatorio, prova_cartella):
         tmp = tempfile.mkdtemp(prefix="cam-flusso-")
         base = os.path.join(tmp, "projects")
         os.makedirs(base, exist_ok=True)

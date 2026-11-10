@@ -461,8 +461,8 @@ dataset, and must not look complete.
 A Claude Code session is two kinds of work taking turns: **requests to the model**, which leave
 for Anthropic, and the work of the **harness** — Claude Code on your machine — which reads
 files, runs commands and applies edits. The **Attive** tab and `--flusso` answer one question
-about the sessions open right now: how much of what happens is sent to the model, and how much
-stays here?
+about the sessions open right now: of the data I have locally, how much was sent to the model?
+A 5 MB folder of which 1 MB was sent reads 20%.
 
 ![The Attive tab: one row per open session](docs/attive.png)
 
@@ -481,22 +481,26 @@ python cam.py --flusso --json              :: the same numbers, machine-readable
 
 | column | what it is | unit |
 |---|---|---|
-| `REQ` | requests sent to the model, subagents included | exact count |
-| `AL MODELLO` / `DAL MODELLO` | tokens in (cache included) / tokens generated | tokens, exact |
-| `NUOVO` | content sent **for the first time** | characters of text |
-| `DA STRUMENTI` | share of the new content that is tool results | ratio |
-| `TOOL` | tools executed on the machine | count |
-| `RESTA QUI` | produced locally by tools and **not** sent | characters of text |
+| `CARTELLA` | size of the session's working folder, as it is on disk now (`.git`, `node_modules` and the like excluded) | KB / MB |
+| `INVIATI` | **local data forwarded to the model**: everything tools run on the machine returned as a result — files read, command output, search results | KB / MB |
+| `QUOTA` | `INVIATI` / `CARTELLA`: a 5 MB folder with 1 MB sent is 20%. Can exceed 100%, since re-reads and command output add up | percentage |
+| `FILE` | files of the folder read and sent, out of the folder's total | `read/total` |
+| `RESTA QUI` | produced locally by tools and **not** sent | KB / MB |
+| `TOOL` / `REQ` | tools executed on the machine / requests to the model | count |
+| `TOKEN` | tokens that entered the model across all requests, cache included. **Not** a measure of data sent: every request resends the whole conversation | tokens, exact |
 | `T.MODELLO` / `T.LOCALE` | waiting for responses / time inside tools | time |
 
 In the UI the tab refreshes every 2 seconds while you look at it; `●` means the session is
 working, `○` that it is waiting for you. Hover a column header for what it measures, click it to
 sort, and double-click a session for its detail, which stays live too. The full column-by-column
-guide is in the [Italian README](README.md#modello-o-macchina).
+guide is in the [Italian README](README.md#modello-o-macchina), and there is a short
+[plain-language walkthrough](docs/guida-semplice.md) (Italian) for people who just want to use it.
 
 ![Session detail: what was sent and what was executed](docs/attive-dettaglio.png)
 
-The detail view splits the new content by who produced it — typed by you, added by Claude
+The detail view lists **which files** were sent, each with how much of it left (a file read
+twice counts once there, so that share never exceeds 100%), and on a second tab splits the new
+content by who produced it — typed by you, added by Claude
 Code, tool results, model output sent back as history — and lists each tool with where it runs
 (on the machine, MCP server, network, other agents) and how much of its output went to the
 model. `Read` forwards everything it reads; `Edit` handles the whole file locally and returns

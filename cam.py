@@ -3135,6 +3135,21 @@ class Osservatorio:
         self.idle_gap = idle_gap
         self.files: dict[str, FileMisurato] = {}
         self.righe: dict[str, tuple] = {}     # session_id -> (file, riga)
+        self.cartelle: dict[str, tuple] = {}  # cwd -> (quando, misura)
+
+    # Ogni quanto si ripesa una cartella di lavoro. Percorrerla costa — e' un
+    # albero intero — e cambia piano: non va rifatto a ogni giro da due secondi.
+    RIPESA_OGNI = 300.0
+
+    def cartella(self, cwd: str | None) -> dict | None:
+        if not cwd:
+            return None
+        prima = self.cartelle.get(cwd)
+        if prima and time.time() - prima[0] < self.RIPESA_OGNI:
+            return prima[1]
+        misura = cam_flusso.misura_cartella(cwd)
+        self.cartelle[cwd] = (time.time(), misura)
+        return misura
 
     def sessione(self, sid: str, files: list[str]) -> dict:
         cambiato = False
@@ -3145,6 +3160,10 @@ class Osservatorio:
             cambiato = fm.update() or cambiato
         prima = self.righe.get(sid)
         if prima and not cambiato and prima[0] == files:
+            # la sessione e' ferma, ma la cartella puo' essere stata ripesata
+            cartella = self.cartella(prima[1].get("cwd"))
+            if cartella is not prima[1]["flusso"].get("cartella"):
+                cam_flusso.confronta(prima[1]["flusso"], cartella)
             return prima[1]
         sess = new_session(sid)
         for path in files:
@@ -3154,7 +3173,9 @@ class Osservatorio:
                 mtime = 0.0
             merge_record(sess, self.files[path].parser.snapshot(), mtime)
         finalize(sess, self.pricing, self.idle_gap)
-        sess["flusso"] = cam_flusso.somma([self.files[p].parziale() for p in files])
+        sess["flusso"] = cam_flusso.confronta(
+            cam_flusso.somma([self.files[p].parziale() for p in files]),
+            self.cartella(sess.get("cwd")))
         self.righe[sid] = (files, sess)
         return sess
 
@@ -3193,8 +3214,17 @@ def h_quota(v: float | None) -> str:
     return f"{v * 100:.0f}%"
 
 
+def coda(path: str, width: int) -> str:
+    """Un percorso accorciato da sinistra: di un file conta la fine, non l'inizio."""
+    path = path or ""
+    if len(path) <= width:
+        return path
+    return ("…" if UNI else "~") + path[-(width - 1):]
+
+
 def flusso_json(sess: dict) -> dict:
     f = dict(sess.get("flusso") or {})
+    f.pop("letti", None)                 # c'e' gia' file_letti, col peso di ognuno
     return {
         "session_id": sess["session_id"],
         "progetto": sess.get("project"),
@@ -3214,6 +3244,40 @@ def print_flusso(sess: dict) -> None:
     print()
     print(f"  {C.w(sess.get('project') or '?', C.BOLD)}  {C.w(sess['session_id'][:8], C.DIM)}"
           f"  {trunc(titolo, 60)}")
+    print()
+    print(C.w("  DATI LOCALI", C.BOLD))
+    cart = f.get("cartella")
+    if cart:
+        print(f"  {C.w('cartella di lavoro', C.DIM)} {h_byte(cart['byte'])} in "
+              f"{cart['file']}{'+' if cart['parziale'] else ''} file"
+              f"   {C.w(sess.get('cwd') or '', C.DIM)}")
+    else:
+        print(C.w("  la cartella di lavoro non c'e' piu' o non e' nota: "
+                  "le quote non si possono calcolare.", C.DIM))
+    print(f"  {C.w('dati locali inviati al modello', C.DIM)} "
+          f"{C.w(h_byte(f['inviato_locale']), C.BOLD)}"
+          f"   {C.w('pari al', C.DIM)} {C.w(h_quota(f['quota_cartella']), C.BOLD)} "
+          f"{C.w('della cartella', C.DIM)}")
+    print(f"  {C.w('file della cartella letti e spediti', C.DIM)} {f['file_dentro']}"
+          + (f" su {cart['file']}" if cart else "")
+          + f"   {C.w('cioè', C.DIM)} {h_byte(f['byte_dentro'])}, "
+          f"il {h_quota(f['copertura'])} {C.w('della cartella, contando ogni file una volta', C.DIM)}")
+    if f["file_fuori"]:
+        print(f"  {C.w('file letti fuori dalla cartella', C.DIM)} {f['file_fuori']} "
+              f"({h_byte(f['byte_fuori'])})")
+    if f["file_letti"]:
+        print()
+        mostra = f["file_letti"][:15]
+        print_table(["FILE SPEDITO", "LETTO", "PESO DEL FILE", "QUANTO"],
+                    [[coda(r["nome"], 62), h_byte(r["letto"]),
+                      h_byte(r["peso"]) if r["peso"] is not None else DASH,
+                      h_quota(cam_flusso.quota(r["unico"], r["peso"]))
+                      if r["peso"] else DASH] for r in mostra],
+                    ["<", ">", ">", ">"])
+        if len(f["file_letti"]) > len(mostra):
+            print(C.w(f"  … e altri {len(f['file_letti']) - len(mostra)} file "
+                      "(--json li elenca tutti)", C.DIM))
+
     print()
     print(C.w("  AL MODELLO", C.BOLD))
     print(f"  {C.w('richieste', C.DIM)} {f['richieste'] if f['misurato'] else DASH}"
@@ -3314,31 +3378,35 @@ def view_flusso(base: str, pricing: dict, args) -> int:
                 ok = f["misurato"]
                 if s.get("_status") == "busy":
                     stili[i] = (C.GREEN,)
+                cart = f.get("cartella")
                 righe.append([
                     s["session_id"][:8],
                     trunc(s.get("project") or "?", 18),
                     {"busy": "lavora", "idle": "aspetta"}.get(s.get("_status"), DASH),
+                    (h_byte(cart["byte"]) + ("+" if cart["parziale"] else ""))
+                    if cart else DASH,
+                    h_byte(f["inviato_locale"]),
+                    h_quota(f["quota_cartella"]),
+                    f"{f['file_dentro']}/{cart['file']}" if cart else f["file_dentro"],
+                    h_byte(f["trattenuto"]) if f["trattenuto"] else DASH,
+                    f["esecuzioni_locali"],
                     f["richieste"] if ok else DASH,
                     h_tokens(token_al_modello(s["tokens"])),
-                    h_tokens(s["tokens"].get("output", 0)),
-                    h_byte(f["nuovo_totale"]) if ok else DASH,
-                    h_quota(cam_flusso.quota(f["nuovo"]["strumenti"], f["nuovo_totale"]))
-                    if ok else DASH,
-                    f["esecuzioni_locali"],
-                    h_byte(f["trattenuto"]) if f["trattenuto"] else DASH,
                     h_dur(f["tempo_modello"]) if ok else DASH,
                     h_dur(f["tempo_strumenti"]),
                 ])
-            print_table(["SESSIONE", "PROGETTO", "STATO", "REQ", "AL MODELLO",
-                         "DAL MODELLO", "NUOVO", "DA STRUMENTI", "TOOL",
-                         "RESTA QUI", "T.MODELLO", "T.LOCALE"], righe,
-                        ["<", "<", "<", ">", ">", ">", ">", ">", ">", ">", ">", ">"],
-                        stili)
+            print_table(["SESSIONE", "PROGETTO", "STATO", "CARTELLA", "INVIATI",
+                         "QUOTA", "FILE", "RESTA QUI", "TOOL", "REQ", "TOKEN",
+                         "T.MODELLO", "T.LOCALE"], righe,
+                        ["<", "<", "<"] + [">"] * 10, stili)
             if sessions:
                 print()
-                print(C.w("  AL/DAL MODELLO in token, esatti. NUOVO e RESTA QUI in "
-                          "testo: cosa e' partito per la prima volta, e cosa gli "
-                          "strumenti hanno prodotto senza spedirlo.", C.DIM))
+                print(C.w("  INVIATI = dati locali girati al modello dagli strumenti; "
+                          "QUOTA = INVIATI / CARTELLA; FILE = file della cartella "
+                          "letti e spediti, sul totale.", C.DIM))
+                print(C.w("  RESTA QUI = prodotto dagli strumenti in locale e non "
+                          "spedito. TOKEN = entrati nel modello in tutte le "
+                          "richieste, cache compresa.", C.DIM))
                 print(C.w("  --flusso --session <uuid> per il dettaglio di una.", C.DIM))
             if not args.watch:
                 return 0

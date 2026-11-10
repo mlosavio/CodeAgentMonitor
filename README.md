@@ -6,6 +6,10 @@ Tempo, costo e numero di messaggi delle conversazioni **Claude Code** e **GitHub
 ricavati dai file che quegli strumenti scrivono già in locale. Con interfaccia grafica,
 cruscotto live nel terminale e un segmento per la statusline.
 
+Per sapere **quanti dei tuoi dati locali sono partiti verso il modello** c'è la scheda
+[Attive](#modello-o-macchina), con una [guida semplice](docs/guida-semplice.md) per chi non
+vuole leggere il resto.
+
 Per un gruppo di lavoro c'è anche un [raccoglitore della telemetria](#più-macchine-il-pannello-di-team)
 che mette insieme più macchine, con tre livelli di riservatezza fra cui scegliere.
 
@@ -108,7 +112,7 @@ python cam.py --json        :: output machine-readable
 | `--grana giorno\|settimana\|mese` | con `--trend`: ampiezza del periodo |
 | `--finestra GIORNI` | con `--trend`: giorni confrontati con i GIORNI precedenti |
 | `--chat` | con `--session`: la conversazione in Markdown |
-| `--flusso` | [sessioni aperte adesso](#modello-o-macchina): cosa parte verso il modello e cosa resta sulla macchina; con `--session` il dettaglio di una, anche chiusa; con `--watch` resta e aggiorna |
+| `--flusso` | [sessioni aperte adesso](#modello-o-macchina): quanti dati locali sono partiti verso il modello, sul peso della cartella di lavoro; con `--session` il dettaglio di una, anche chiusa; con `--watch` resta e aggiorna |
 | `--watch` / `--interval S` | live sulla sessione modificata più di recente |
 | `--idle-gap S` | pausa oltre la quale il tempo non è "attivo" (default 300s) |
 | `--no-cache` / `--clear-cache` | ignora / svuota la cache di analisi ([l'archivio resta](#larchivio-cam-localdb)) |
@@ -145,8 +149,8 @@ Stessa logica del CLI (lo importa come modulo), quindi i numeri coincidono alla 
   stima del modello — compare *Fatturato*, che è quello che la console addebita davvero; e
   **compaiono anche le postazioni che pagano senza consumare**, che altrimenti non esisterebbero
   in nessuna riga.
-- **Attive** elenca le sessioni di Claude Code aperte adesso e, per ognuna, quanto contenuto è
-  partito verso il modello e quanto lavoro è rimasto sulla macchina. Si aggiorna da sola ogni
+- **Attive** elenca le sessioni di Claude Code aperte adesso e, per ognuna, quanti dati locali
+  sono partiti verso il modello rispetto a quanto pesa la cartella di lavoro. Si aggiorna da sola ogni
   2 s finché la guardi; **doppio click su una sessione** apre il dettaglio, che resta vivo
   anche lui. La guida completa, colonna per colonna, è in [Modello o macchina](#modello-o-macchina).
 - **Ogni intestazione ha la sua spiegazione** al passaggio del mouse.
@@ -492,12 +496,20 @@ confondono:
 - il lavoro dell'**harness** — Claude Code sulla tua macchina — che legge file, esegue comandi e
   applica modifiche. Il modello chiede, la macchina esegue, e al modello torna il risultato.
 
-La scheda **Attive** risponde a una domanda sola, sulle sessioni aperte adesso: **quanto di
-quello che succede parte verso il modello, e quanto resta qui?**
+La scheda **Attive** risponde a una domanda sola, sulle sessioni aperte adesso: **dei dati
+che ho in locale, quanti sono partiti verso il modello?**
+
+Il conto è quello che si farebbe a mano: *lavoro su una cartella da 5 MB, Claude Code ne ha
+spedito 1 MB, cioè il 20%*. La scheda lo fa per ogni sessione aperta, e dice anche **quali**
+file sono partiti.
 
 ![La scheda Attive: una riga per sessione aperta](docs/attive.png)
 
 *Le sessioni delle schermate sono dimostrative: progetti, titoli e contenuti sono inventati.*
+
+> **Vuoi solo usarla, senza i dettagli?** C'è la
+> **[guida semplice](docs/guida-semplice.md)**: cinque passi, tre numeri da leggere, e le
+> domande che vengono in mente. Quello che segue è il riferimento completo.
 
 ### Come si avvia
 
@@ -552,124 +564,163 @@ Fra parentesi il nome della stessa colonna nell'uscita di `python cam.py --fluss
 | Colonna | Cosa dice | Unità | Come leggerla |
 |---|---|---|---|
 | **Sessione** (`SESSIONE`, `PROGETTO`, `STATO`) | Progetto e titolo che Claude Code ha dato alla conversazione. `●` lavora, `○` aspetta | — | Nel terminale l'identificativo, il progetto e lo stato sono tre colonne separate |
-| **Richieste** (`REQ`) | Quante volte la sessione ha chiamato il modello, subagent compresi | conteggio esatto | Ogni lettura di file o comando costa una richiesta in più: il modello chiede, riceve il risultato, e va richiamato |
-| **Al modello** (`AL MODELLO`) | Token entrati nel modello sommando **tutte** le richieste: input, più quello riletto dalla cache o scritto in cache | token, esatti | Cresce molto più in fretta del contenuto, perché ogni richiesta rispedisce la conversazione intera |
-| **Dal modello** (`DAL MODELLO`) | Token generati: risposte, ragionamento, chiamate agli strumenti | token, esatti | È la parte più cara a listino e di gran lunga la più piccola |
-| **Nuovo** (`NUOVO`) | Contenuto spedito al modello **per la prima volta**: ogni pezzo contato una volta sola, anche se poi è ripartito con ogni richiesta | caratteri di testo | È la misura di *cosa* è uscito dalla macchina. Il dettaglio lo divide per provenienza |
-| **Da strumenti** (`DA STRUMENTI`) | Quanta parte del nuovo sono risultati di strumenti: file letti, output di comandi | quota | Alta = è la macchina, non tu, a riempire il contesto. È il caso normale |
-| **In locale** (`TOOL`) | Strumenti eseguiti da Claude Code sulla macchina: letture, comandi, modifiche, ricerche | conteggio | Non conta quelli che girano altrove: server MCP, ricerche in rete, altri agenti |
-| **Resta qui** (`RESTA QUI`) | Quello che gli strumenti locali hanno prodotto o maneggiato **senza** spedirlo al modello | caratteri di testo | Cresce con le modifiche (il file intero resta qui, parte una riga di conferma) e con gli output lunghi (su disco per intero, al modello un'anteprima) |
-| **T. modello** (`T.MODELLO`) | Tempo passato ad aspettare le risposte: dalla partenza di ogni richiesta alla fine della sua risposta | tempo | Con dei subagent in parallelo può superare il tempo di orologio |
+| **Cartella** (`CARTELLA`) | Quanto pesa la cartella di lavoro della sessione, com'è adesso sul disco | KB / MB | È il denominatore. Non contano la storia di git, le dipendenze scaricate e il bytecode ([l'elenco](#come-si-pesa-la-cartella)). Un `+` vuol dire che il conto si è fermato prima della fine |
+| **Inviati** (`INVIATI`) | **Dati locali girati al modello**: tutto quello che gli strumenti eseguiti sulla macchina hanno rimandato come risultato — file letti, output di comandi, esiti di ricerche | KB / MB | È il totale spedito: un file letto due volte conta due volte |
+| **Quota** (`QUOTA`) | *Inviati* diviso *Cartella* | percentuale | Cartella da 5 MB, 1 MB inviato: 20%. Può superare il 100%, perché riletture e output di comandi si sommano |
+| **File** (`FILE`) | File della cartella letti e spediti, sul totale dei file della cartella | `letti/totale` | Conta le letture dirette. Un file stampato da un comando è partito lo stesso, ma sta in *Inviati*, non qui |
+| **Resta qui** (`RESTA QUI`) | Quello che gli strumenti locali hanno prodotto o maneggiato **senza** spedirlo | KB / MB | Cresce con le modifiche (il file intero resta qui, parte una riga di conferma) e con gli output lunghi (su disco per intero, al modello un'anteprima) |
+| (`TOOL`) | Strumenti eseguiti da Claude Code sulla macchina | conteggio | Solo nel terminale; nel pannello sta nel dettaglio |
+| **Richieste** (`REQ`) | Quante volte la sessione ha chiamato il modello, subagent compresi | conteggio esatto | Ogni lettura di file o comando costa una richiesta in più |
+| **Token** (`TOKEN`) | Token entrati nel modello sommando **tutte** le richieste, cache compresa | token, esatti | **Non è la misura dei dati usciti**: ogni richiesta rispedisce la conversazione intera, quindi lo stesso file viene contato a ogni giro. Dice quanto lavora il modello, non quanto è partito |
+| **T. modello** (`T.MODELLO`) | Tempo passato ad aspettare le risposte | tempo | Con dei subagent in parallelo può superare il tempo di orologio |
 | **T. locale** (`T.LOCALE`) | Tempo passato dentro gli strumenti; quelli lanciati insieme contano una volta | tempo | Comprende l'attesa di un permesso che dovevi concedere tu |
 | **Ultima** | Quanto tempo fa la sessione ha scritto l'ultima riga | — | Solo nel pannello |
 
-Due cose valgono per tutte le colonne:
+Tre cose valgono per tutte le colonne:
 
-- **Token e caratteri non si convertono.** I token esatti li dà l'API, ma solo come totale per
-  richiesta, senza dire di chi sono. I caratteri dicono la composizione; i token, il conto.
-- **«—» non è zero.** Vuol dire «qui non si sa». Compare al posto di *Richieste*, *Nuovo*,
-  *Da strumenti* e *T. modello* per le sessioni aperte con un Claude Code precedente alla
-  2.1.309, che non registrava le richieste: è il caso della terza riga nella schermata.
+- **I KB sono caratteri di testo.** Per sorgenti e dati in formato testo coincidono in pratica
+  coi byte del file; per un'immagine letta si contano i byte dell'immagine.
+- **KB e token non si convertono.** I token esatti li dà l'API, ma solo come totale per
+  richiesta, senza dire di chi sono.
+- **«—» non è zero.** Vuol dire «qui non si sa». Compare al posto di *Richieste* e
+  *T. modello* per le sessioni aperte con un Claude Code precedente alla 2.1.309, e al posto di
+  *Cartella* e *Quota* se la cartella di lavoro non esiste più.
 
 ### Un esempio, letto riga per riga
 
 ```
-SESSIONE  PROGETTO    STATO    REQ  AL MODELLO  DAL MODELLO     NUOVO  DA STRUMENTI  TOOL  RESTA QUI  T.MODELLO  T.LOCALE
-a1b2c3d4  gestionale  lavora    57       5.08M          13k  802.2 KB           68%    51     341 KB      5m54s     2m52s
-e5f6a7b8  sito-web    aspetta   12        454k         1.8k  171.1 KB           33%    10      35 KB      1m05s       53s
-c9d0e1f2  appunti     aspetta    —         43k         3.4k         —             —     7      21 KB          —        2s
+SESSIONE  PROGETTO    STATO    CARTELLA  INVIATI  QUOTA   FILE  RESTA QUI  TOOL  REQ   TOKEN  T.MODELLO  T.LOCALE
+a1b2c3d4  gestionale  lavora     4.5 MB   1.2 MB    26%  21/32   357.2 KB    54   60  11.42M      6m34s     2m34s
+e5f6a7b8  sito-web    aspetta   23.6 MB  67.2 KB    <1%   4/19    36.3 KB    10   12    488k      1m01s       53s
+c9d0e1f2  appunti     aspetta   71.4 KB  39.4 KB    55%   5/10      21 KB     7    —     55k          —        2s
 ```
 
-- **gestionale** sta lavorando. In 57 richieste sono entrati nel modello 5,08 milioni di token,
-  ma il contenuto davvero nuovo è 802 KB: la differenza è la stessa conversazione ricaricata
-  ogni volta. Due terzi di quel contenuto (68%) sono risultati di strumenti. Sulla macchina
-  sono stati eseguiti 51 strumenti, e 341 KB di quello che hanno maneggiato non sono mai
-  partiti.
-- **sito-web** aspetta. Solo un terzo del contenuto viene dagli strumenti: su una sessione
-  corta pesa di più quello che Claude Code aggiunge all'inizio — istruzioni, elenco degli
-  strumenti, contesto del progetto — che è lo stesso qualunque cosa tu chieda.
-- **appunti** è stata aperta con una versione vecchia di Claude Code. I token ci sono, perché
-  stanno nelle risposte; gli strumenti pure. Le richieste e la composizione no, e la riga lo
-  dice con «—» invece di inventare uno zero.
+- **gestionale**: la cartella pesa 4,5 MB e al modello ne sono partiti 1,2 MB, il 26%. Sono
+  stati letti 21 file su 32. Altri 357 KB sono passati per gli strumenti senza partire. I
+  token sono 11,42 milioni — dieci volte i dati — perché in 60 richieste la stessa
+  conversazione è ripartita ogni volta: è il motivo per cui i token non misurano i dati usciti.
+- **sito-web**: 23,6 MB di cartella, quasi tutta fotografie, e meno dell'1% inviato. Sono
+  partiti quattro file di testo; le immagini sono state convertite da un comando, sulla
+  macchina, e il modello non le ha mai viste.
+- **appunti**: cartella piccola, e più di metà è partita — normale, quando il lavoro è leggere
+  le note. La sessione gira su un Claude Code vecchio: richieste e attesa del modello valgono
+  «—», ma i dati inviati si misurano lo stesso, perché stanno nei risultati degli strumenti.
 
 ### Il dettaglio di una sessione
 
 Doppio click su una riga, oppure `python cam.py --flusso --session a1b2c3d4`.
 
-![Il dettaglio di una sessione: cosa è partito e cosa è stato eseguito](docs/attive-dettaglio.png)
+![Il dettaglio di una sessione: quali file sono partiti](docs/attive-dettaglio.png)
 
 **Le cinque tessere in alto**
 
 | Tessera | Numero grande | Riga sotto |
 |---|---|---|
-| **Richieste** | chiamate al modello, subagent compresi | *ogni messaggio partito N volte*: quante volte, in media, lo stesso messaggio è stato rispedito. 20 vuol dire che un file letto all'inizio ha viaggiato in venti richieste |
-| **Al modello** | token entrati, in tutto | quanta parte è arrivata dalla cache invece che a prezzo pieno, e i token usciti |
-| **Contenuto nuovo** | testo spedito per la prima volta | la quota che viene dagli strumenti |
-| **In locale** | strumenti eseguiti sulla macchina | quanto di ciò che hanno prodotto è rimasto qui |
+| **Dati locali inviati** | KB girati al modello dagli strumenti locali — la colonna *Inviati* | la quota sulla cartella, e quanto pesa la cartella |
+| **File inviati** | file della cartella letti e spediti, sul totale | quanti KB fanno contando **ogni file una volta**, e che parte della cartella coprono |
+| **Resta qui** | prodotto in locale e non spedito | quanti strumenti sono stati eseguiti sulla macchina |
+| **Token al modello** | token entrati, in tutto | numero di richieste, e quanta parte è arrivata dalla cache |
 | **Attesa del modello** | tempo passato ad aspettare le risposte | tempo passato negli strumenti |
 
-**«Cosa è partito verso il modello»** divide il contenuto nuovo per chi l'ha prodotto. La barra
-confronta le righe fra loro, la percentuale è sul totale.
+Le prime due tessere dicono due cose diverse, e conviene non confonderle:
+
+| | Dati locali inviati | File inviati |
+|---|---|---|
+| Domanda | quanto è partito, in tutto? | quanta parte della cartella è uscita almeno una volta? |
+| Cosa conta | file letti **e** output di comandi e ricerche | solo i file letti direttamente |
+| Un file letto due volte | conta due volte | conta una |
+| Può superare il 100% | sì | no |
+| Nell'esempio | 1,2 MB, il 26% | 935,8 KB, il 20% |
+
+**Scheda «File inviati»** — una riga per file il cui contenuto è stato letto e spedito.
+
+| Colonna | Cosa dice |
+|---|---|
+| **File** | Percorso relativo alla cartella di lavoro; intero se il file sta fuori |
+| **Dove sta** | *nella cartella* o *fuori*: Claude Code può leggere anche altrove, e quei file non entrano nelle quote |
+| **Letto** | Quanto contenuto del file è partito, sommando tutte le letture |
+| **Peso del file** | Quanto pesa adesso sul disco. «—» se nel frattempo è stato cancellato o spostato |
+| **Quanto** | Che parte del file è partita almeno una volta. Non supera il 100% anche se è stato riletto |
+
+Nell'esempio `dati\fatture_2025.csv` pesa 1,4 MB ma ne è partito il 22%: è stato letto solo
+l'inizio. `src\export\report.py` ha *Letto* 82 KB su un file da 41 KB: è stato letto due volte,
+e *Quanto* resta 100%.
+
+![La seconda scheda del dettaglio: di chi è il contenuto, e cosa è stato eseguito](docs/attive-strumenti.png)
+
+**Scheda «Contenuto e strumenti» — «Cosa è partito verso il modello»** divide per chi l'ha
+prodotto *tutto* quello che è stato spedito per la prima volta, non solo i dati locali. La
+barra confronta le righe fra loro, la percentuale è sul totale.
 
 | Riga | Cosa contiene |
 |---|---|
-| **Scritto da te** | I tuoi messaggi, e le immagini che alleghi. È quasi sempre la riga più piccola: qui 243 caratteri su 802 KB |
+| **Scritto da te** | I tuoi messaggi, e le immagini che alleghi. È quasi sempre la riga più piccola |
 | **Aggiunto da Claude Code** | Quello che parte senza che tu l'abbia scritto: istruzioni di sistema, definizioni degli strumenti, contesto del progetto (i `CLAUDE.md`), promemoria, contesto dell'editor |
-| **Risultati degli strumenti** | File letti, output di comandi, risultati di ricerche: quello che la macchina ha prodotto ed è stato girato al modello |
-| **Risposte del modello, rispedite** | Quello che il modello ha già detto e fatto — testo, ragionamento, chiamate agli strumenti — che torna indietro come storia nelle richieste successive |
+| **Risultati degli strumenti** | File letti, output di comandi, risultati di ricerche. La parte eseguita sulla macchina è la colonna *Inviati*; qui ci sono anche i risultati di server MCP, ricerche in rete e subagent |
+| **Risposte del modello, rispedite** | Quello che il modello ha già detto e fatto, che torna indietro come storia nelle richieste successive |
 
 **«Cosa è stato eseguito, e dove»** ha una riga per strumento.
 
 | Colonna | Cosa dice |
 |---|---|
 | **Strumento** | Il nome con cui il modello lo chiama: `Read`, `Bash`, `Edit`, … Quelli che cominciano per `mcp__` sono di un server MCP |
-| **Dove gira** | *sulla macchina*: lo esegue Claude Code qui. *server MCP*: lo esegue un server esterno a Claude Code. *in rete*: ricerche e pagine web. *altri agenti*: lavoro delegato a un subagent, che è a sua volta fatto di richieste al modello |
+| **Dove gira** | *sulla macchina*: lo esegue Claude Code qui. *server MCP*: lo esegue un server esterno a Claude Code. *in rete*: ricerche e pagine web. *altri agenti*: lavoro delegato a un subagent |
 | **Volte** | Quante esecuzioni si sono concluse con un risultato |
 | **Prodotto** | Quanto testo lo strumento ha prodotto o maneggiato in locale |
-| **Al modello** | Quanta parte ne è stata girata al modello come risultato |
+| **Al modello** | Quanta parte ne è stata girata al modello. La somma delle righe «sulla macchina» è *Dati locali inviati* |
 | **Resta qui** | La differenza fra le due: prodotto in locale e non spedito |
 | **Tempo** | Dalla chiamata al risultato, sommando le esecuzioni; attese di permesso comprese |
 | **Errori** | Esecuzioni tornate al modello come errore: comando fallito, file non trovato, permesso negato |
 
-Nel terminale le stesse due tabelle:
+Nel terminale, le stesse cose in sequenza:
 
 ```
-DA DOVE VIENE                            TESTO  QUOTA
-scritto da te                         243 byte    <1%
-aggiunto da Claude Code               221.1 KB    28%
-risultati degli strumenti             542.9 KB    68%
-risposte del modello, rispedite          38 KB     5%
-contenuto spedito per la prima volta  802.2 KB
+  DATI LOCALI
+  cartella di lavoro 4.5 MB in 32 file   C:\demo-cam\lavoro\gestionale
+  dati locali inviati al modello 1.2 MB   pari al 26% della cartella
+  file della cartella letti e spediti 21 su 32   cioè 935.8 KB, il 20% della cartella, contando ogni file una volta
+  file letti fuori dalla cartella 1 (20.5 KB)
 
-  ogni messaggio è partito in media 20 volte: a ogni richiesta riparte la conversazione intera
-  richieste per origine 45 sdk, 12 agent:builtin:general-purpose
+FILE SPEDITO                                          LETTO  PESO DEL FILE  QUANTO
+dati\fatture_2025.csv                                318 KB         1.4 MB     22%
+dati\clienti.csv                                   181.6 KB       605.5 KB     30%
+src\export\report.py                                  82 KB          41 KB    100%
+src\export\csv.py                                   76.6 KB        38.3 KB    100%
+  … e altri 18 file (--json li elenca tutti)
 
 STRUMENTO             DOVE GIRA        N  PRODOTTO  AL MODELLO  RESTA QUI  TEMPO
-Read                  sulla macchina  22  445.2 KB    445.2 KB          —     6s
-Edit                  sulla macchina  11  263.1 KB      1.6 KB   261.5 KB     6s
-Bash                  sulla macchina   9  119.7 KB     55.2 KB    64.5 KB  2m25s
-Grep                  sulla macchina   7   23.1 KB     23.1 KB          —     3s
+Read                  sulla macchina  25    1.1 MB      1.1 MB          —     7s
+Edit                  sulla macchina  11  279.3 KB      1.6 KB   277.7 KB     6s
+Bash                  sulla macchina   9  128.5 KB     64.1 KB    64.5 KB  2m06s
+Grep                  sulla macchina   7   24.7 KB     24.7 KB          —     3s
 Write                 sulla macchina   1   15.2 KB    140 byte    15.1 KB     0s
 mcp__database__query  server MCP       2    9.7 KB      9.7 KB          —     4s
-Agent                 altri agenti     1    5.1 KB      2.1 KB       3 KB  1m35s
-WebSearch             in rete          1      4 KB        4 KB          —     6s
-Glob                  sulla macchina   1    1.9 KB      1.9 KB          —     0s
-
-  eseguiti sulla macchina 51 su 55   prodotto 868.2 KB   girato al modello 61%   resta qui 341 KB
 ```
 
 Tre righe che dicono tre cose diverse:
 
-- **`Read`** gira al modello tutto quello che legge: 445 KB prodotti, 445 KB partiti. È lui a
-  riempire il contesto, ed è il primo posto dove guardare se una sessione consuma troppo.
-- **`Edit`** maneggia in locale il file intero — 263 KB in undici modifiche — e al modello
+- **`Read`** gira al modello tutto quello che legge: 1,1 MB prodotti, 1,1 MB partiti. Quasi
+  tutti i dati locali inviati vengono da qui, ed è il primo posto dove guardare.
+- **`Edit`** maneggia in locale il file intero — 279 KB in undici modifiche — e al modello
   rimanda una riga di conferma per volta: 1,6 KB in tutto.
 - **`Bash`** sta nel mezzo: metà del suo output è rimasta qui, perché un comando ha scritto
   troppo e al modello ne è andata solo un'anteprima.
 
-*Richieste per origine* compare quando non tutte le richieste vengono dalla conversazione
-principale: `sdk` (o il nome dell'interfaccia in uso) è la conversazione, `agent:…` sono i
-subagent.
+### Come si pesa la cartella
+
+La cartella è quella da cui la sessione è stata avviata. Si contano i file come stanno sul
+disco **adesso**, tolte le cartelle che non sono dati di lavoro: `.git`, `.hg`, `.svn`,
+`node_modules`, `__pycache__`, `.venv`, `venv`, `.mypy_cache`, `.pytest_cache`, `.tox`. Con un
+`.git` da 200 MB accanto a 5 MB di sorgenti, qualunque quota sembrerebbe trascurabile.
+
+Tutto il resto conta, **anche quello che Claude Code non leggerebbe mai**: immagini, archivi,
+database. È voluto — la domanda è «quanta parte di quello che ho qui è uscita» — ma vuol dire
+che una cartella piena di file binari dà quote basse anche se tutti i sorgenti sono partiti.
+La colonna *File* e l'elenco dei file aiutano a distinguere i due casi.
+
+Percorrere un albero costa, quindi il peso si ricalcola ogni cinque minuti e non a ogni
+aggiornamento. Oltre i 200.000 file il conto si ferma e la cifra porta un `+`: la quota è
+allora sovrastimata.
 
 ### Da dove vengono questi numeri
 
@@ -685,7 +736,10 @@ richieste per quello che sono:
 Quindi **quante** richieste, **quando** e **con quanti messaggi** non si stima: si legge. Il
 lavoro locale sta invece nelle righe dei risultati, che portano due cose distinte:
 `toolUseResult` è ciò che lo strumento ha prodotto sulla macchina, `message.content` è la parte
-girata al modello. La differenza fra le due è la colonna *Resta qui*.
+girata al modello. La differenza fra le due è la colonna *Resta qui*; la somma della seconda,
+sugli strumenti eseguiti in locale, è la colonna *Inviati*. Per le letture il transcript porta
+anche il percorso del file e il suo contenuto senza i numeri di riga: è da lì che viene
+l'elenco dei file.
 
 Tutto viene letto dal disco, in sola lettura. Il pannello non intercetta il traffico, non parla
 con Anthropic e non modifica i transcript.
@@ -705,18 +759,23 @@ storia riemessa da un `--resume`.
 
 ### Cosa NON dice
 
-- **Non dice quanto costa.** Per quello ci sono le altre schede. Qui i token servono a dare la
-  scala, non il prezzo.
-- **Il contenuto è in caratteri, non in token**, e fra le due unità non c'è conversione.
-- **«T. locale» comprende l'attesa di un permesso.** Il transcript segna quando uno strumento è
-  stato chiesto e quando ha risposto: se in mezzo c'eri tu che dovevi dire di sì, non lo
-  distingue.
+- **Non dice quanto costa.** Per quello ci sono le altre schede.
+- **Non è una misura di riservatezza.** *Inviati* conta ciò che gli strumenti hanno girato al
+  modello. Non conta quello che scrivi tu nei messaggi, i file `CLAUDE.md` che Claude Code
+  allega da sé, né i dati che arrivano da un server MCP: stanno nella scheda «Contenuto e
+  strumenti», sotto altre voci.
+- **«Resta qui» non vuol dire «non è mai partito».** Dice che quel testo non è partito *come
+  risultato di quello strumento*. Un file modificato con `Edit` può essere stato letto prima
+  con `Read`, e allora è partito da lì.
+- **La quota confronta ieri con oggi.** I dati inviati sono quelli di tutta la sessione, il
+  peso della cartella è quello di adesso: se nel frattempo hai cancellato metà dei file, la
+  quota sale senza che sia partito niente di nuovo.
+- **«File» vede solo le letture dirette.** Un `cat` o un `grep` dentro un comando spediscono
+  contenuto di file senza che si possa dire di quale: finisce in *Inviati* e non nell'elenco.
+- **«T. locale» comprende l'attesa di un permesso**, che il transcript non distingue
+  dall'esecuzione.
 - **«Server MCP» non dice dove gira il server**: può essere un processo sulla macchina o un
-  servizio remoto, e dal transcript non si distingue. Per questo sta in una voce sua, fuori dal
-  conto di ciò che è eseguito in locale.
-- **«Resta qui» non vuol dire «riservato».** Dice che quel testo non è partito *come risultato
-  di quello strumento*. Un file modificato con `Edit` può essere stato letto prima con `Read`, e
-  allora è partito da lì.
+  servizio remoto. Per questo sta in una voce sua, fuori dal conto dei dati locali.
 - **Non entra nell'archivio.** Questi numeri si ricalcolano dal transcript ogni volta: per una
   sessione chiusa il cui transcript è scaduto, questa vista non c'è.
 
@@ -727,7 +786,9 @@ storia riemessa da un `--resume`.
 | *nessuna sessione di Claude Code aperta* | Non c'è nessun processo di Claude Code vivo, oppure la sessione è appena stata aperta e non ha ancora un messaggio |
 | *leggo le sessioni aperte…* che dura | È la prima lettura di transcript grossi: decine di MB richiedono qualche secondo, una volta sola |
 | Una sessione chiusa non compare | È giusto: la scheda mostra solo quelle aperte. Per una chiusa, `python cam.py --flusso --session <uuid>` |
-| «—» in metà delle colonne | La sessione gira su un Claude Code precedente alla 2.1.309: aggiornalo e apri una sessione nuova |
+| «—» in *Richieste* e *T. modello* | La sessione gira su un Claude Code precedente alla 2.1.309: aggiornalo e apri una sessione nuova |
+| «—» in *Cartella* e *Quota* | La cartella da cui la sessione è partita non esiste più, o è stata rinominata |
+| *Quota* oltre il 100% | Non è un errore: gli stessi file sono stati riletti, o i comandi hanno stampato molto. La tessera *File inviati* dà la parte di cartella uscita almeno una volta |
 
 **Quali sessioni sono «aperte».** Quelle con un processo vivo: Claude Code tiene un file per
 processo in `~/.claude/sessions/`, che dice anche se sta lavorando o aspetta te. Un file rimasto
@@ -1706,7 +1767,8 @@ versioni dell'estensione.
 Se tocchi [modello o macchina](#modello-o-macchina), `python test_flusso.py` deve restare
 verde. Sorveglia i modi in cui quei numeri si sbagliano restando plausibili: lo stesso contenuto
 contato due volte perché sta sia in una riga sia in una richiesta registrata, il file intero di
-una modifica scambiato per ciò che è partito, uno zero al posto di «non misurato».
+una modifica scambiato per ciò che è partito, uno zero al posto di «non misurato», un file
+riletto contato due volte nella parte di cartella uscita.
 
 Se tocchi gli [andamenti](#andamenti-e-indicatori), `python test_statistiche.py` deve restare
 verde. Guarda i punti in cui una statistica dice una bugia senza accorgersene: che i periodi

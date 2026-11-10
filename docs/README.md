@@ -11,6 +11,7 @@ questa cartella, e la pagina è una copia.
 | [../README.md](../README.md) | Il documento principale. Cosa fa, come si installa, come funziona |
 | [../README.en.md](../README.en.md) | Lo stesso in inglese |
 | [../TODO.md](../TODO.md) | Il backlog: solo quello che manca, una PF per riga |
+| [guida-semplice.md](guida-semplice.md) | **Quanti dei miei dati vanno al modello?** La scheda Attive spiegata a chi non programma: cinque passi e le domande frequenti |
 | [team-in-sede.md](team-in-sede.md) | Attivare CAM in un team **sulla stessa rete aziendale** |
 | [team-distribuito.md](team-distribuito.md) | Attivare CAM in un team **sparso geograficamente**, col pannello riservato a un amministratore |
 | [post-linkedin.md](post-linkedin.md) | Il testo del post di lancio |
@@ -54,10 +55,10 @@ secondo è sbagliato senza che nessuno se ne accorga.
 `CodeAgentMonitor.png` è la copertina del README. Si ricostruisce dalle finestre reali del
 pannello; nomi di progetti e titoli delle conversazioni sono sfocati, i numeri sono veri.
 
-`attive.png`, `attive-aiuto.png` e `attive-dettaglio.png` illustrano la guida
+`attive.png`, `attive-aiuto.png`, `attive-dettaglio.png` e `attive-strumenti.png` illustrano la guida
 [Modello o macchina](../README.md#modello-o-macchina). Qui la regola è l'altra: **niente è
-sfocato perché niente è vero**. Le tre sessioni sono transcript costruiti apposta — progetti,
-titoli e contenuti inventati — e il pannello è stato avviato su quella cartella con
+sfocato perché niente è vero**. Le tre sessioni sono transcript costruiti apposta, su tre
+cartelle di lavoro costruite apposta — progetti, titoli, file e contenuti inventati — e il pannello è stato avviato su quella cartella con
 `--base`, la configurazione d'esempio e la sorgente Copilot spenta, così nelle immagini non
 entra nessun dato della macchina su cui sono state fatte. Gli esempi da terminale della guida
 vengono dalle stesse sessioni, quindi numeri e schermate coincidono.

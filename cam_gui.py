@@ -1287,25 +1287,35 @@ def nome_sessione(r: dict) -> str:
     return f"{r.get('project') or '?'}  ·  {titolo}"
 
 
+def cartella_txt(r: dict) -> str:
+    c = _fl(r).get("cartella")
+    return (cam.h_byte(c["byte"]) + ("+" if c["parziale"] else "")) if c else "—"
+
+
+def quota_cartella_txt(v: float | None) -> str:
+    if v is None:
+        return "—"
+    return "<1%" if 0 < v < 0.01 else f"{v * 100:.0f}%"
+
+
 ATTIVE_COLUMNS = [
-    ("title",  "Sessione",    300, "w", lambda r: nome_sessione(r).lower(),
+    ("title",  "Sessione",    280, "w", lambda r: nome_sessione(r).lower(),
      lambda r: ("● " if r.get("_status") == "busy" else "○ ") + nome_sessione(r)),
+    ("cart",   "Cartella",     90, "e",
+     lambda r: (_fl(r).get("cartella") or {}).get("byte", 0), cartella_txt),
+    ("inv",    "Inviati",      90, "e", lambda r: _fl(r)["inviato_locale"],
+     lambda r: cam.h_byte(_fl(r)["inviato_locale"])),
+    ("quota",  "Quota",        65, "e", lambda r: _fl(r).get("quota_cartella") or 0,
+     lambda r: quota_cartella_txt(_fl(r).get("quota_cartella"))),
+    ("file",   "File",         85, "e", lambda r: _fl(r)["file_dentro"],
+     lambda r: (f"{_fl(r)['file_dentro']}/{_fl(r)['cartella']['file']}"
+                if _fl(r).get("cartella") else _fl(r)["file_dentro"])),
+    ("tratt",  "Resta qui",    90, "e", lambda r: _fl(r)["trattenuto"],
+     lambda r: cam.h_byte(_fl(r)["trattenuto"]) if _fl(r)["trattenuto"] else "—"),
     ("req",    "Richieste",    80, "e", lambda r: _fl(r)["richieste"],
      lambda r: _fl(r)["richieste"] if _fl(r)["misurato"] else "—"),
-    ("tin",    "Al modello",   90, "e", lambda r: cam.token_al_modello(r["tokens"]),
+    ("tin",    "Token",        80, "e", lambda r: cam.token_al_modello(r["tokens"]),
      lambda r: Fmt.tokens(cam.token_al_modello(r["tokens"]))),
-    ("tout",   "Dal modello",  95, "e", lambda r: r["tokens"]["output"],
-     lambda r: Fmt.tokens(r["tokens"]["output"])),
-    ("nuovo",  "Nuovo",        85, "e", lambda r: _fl(r)["nuovo_totale"],
-     lambda r: cam.h_byte(_fl(r)["nuovo_totale"]) if _fl(r)["misurato"] else "—"),
-    ("strum",  "Da strumenti", 100, "e",
-     lambda r: cam_flusso.quota(_fl(r)["nuovo"]["strumenti"], _fl(r)["nuovo_totale"]) or 0,
-     lambda r: (quota_txt(_fl(r)["nuovo"]["strumenti"], _fl(r)["nuovo_totale"])
-                if _fl(r)["misurato"] else "—")),
-    ("tool",   "In locale",    75, "e", lambda r: _fl(r)["esecuzioni_locali"],
-     lambda r: _fl(r)["esecuzioni_locali"]),
-    ("tratt",  "Resta qui",    85, "e", lambda r: _fl(r)["trattenuto"],
-     lambda r: cam.h_byte(_fl(r)["trattenuto"]) if _fl(r)["trattenuto"] else "—"),
     ("tmod",   "T. modello",   90, "e", lambda r: _fl(r)["tempo_modello"],
      lambda r: Fmt.dur(_fl(r)["tempo_modello"]) if _fl(r)["misurato"] else "—"),
     ("tloc",   "T. locale",    80, "e", lambda r: _fl(r)["tempo_strumenti"],
@@ -1317,12 +1327,29 @@ ATTIVE_COLUMNS = [
 AIUTO_ATTIVE = {
     "title": "Le sessioni di Claude Code aperte adesso su questa macchina.\n\n"
              "● = sta lavorando   ○ = aspetta te.",
+    "cart": "Quanto pesa la cartella di lavoro della sessione, com'è adesso sul "
+            "disco.\n\nNon contano la storia di git, le dipendenze scaricate e il "
+            "bytecode: non sono i dati su cui lavori. Un «+» vuol dire che la "
+            "cartella è troppo grande e il conto si è fermato prima della fine.",
+    "inv": "Dati locali girati al modello: tutto quello che gli strumenti eseguiti "
+           "sulla macchina hanno rimandato come risultato — file letti, output di "
+           "comandi, esiti di ricerche.\n\nÈ il totale spedito: un file letto due "
+           "volte conta due volte.",
+    "quota": "Inviati diviso Cartella: quanta roba è partita rispetto a quanta ce "
+             "n'è.\n\nSu una cartella da 5 MB, 1 MB inviato fa 20%. Può superare "
+             "il 100%: riletture e output di comandi si sommano. Per sapere quanta "
+             "parte della cartella è uscita almeno una volta, apri il dettaglio.",
+    "file": "File della cartella letti e spediti al modello, sul totale dei file "
+            "della cartella.\n\nConta le letture dirette. Un file stampato da un "
+            "comando è partito lo stesso, ma qui non compare: sta in Inviati.",
     "req": "Richieste partite verso il modello, subagent compresi.\n\n"
            "Ogni richiesta porta con sé la conversazione intera: per questo i "
            "token entrati crescono molto più in fretta del contenuto nuovo.",
     "tin": "Token entrati nel modello in tutte le richieste: input, più quello "
            "che è stato riletto dalla cache o scritto in cache. È il numero "
-           "esatto, dalla risposta dell'API.",
+           "esatto, dalla risposta dell'API.\n\nNON è la misura dei dati usciti: "
+           "ogni richiesta rispedisce la conversazione intera, quindi lo stesso "
+           "file viene contato a ogni giro. Per i dati guarda Inviati.",
     "tout": "Token generati dal modello: risposte, ragionamento e chiamate "
             "agli strumenti.",
     "nuovo": "Testo spedito al modello per la prima volta: i tuoi messaggi, i "
@@ -1370,6 +1397,31 @@ STRUMENTO_COLUMNS = [
     ("err",    "Errori",       65, "e", lambda r: r["errori"],
      lambda r: r["errori"] or "—"),
 ]
+
+FILE_COLUMNS = [
+    ("nome",   "File",          420, "w", lambda r: r["nome"].lower(),
+     lambda r: r["nome"]),
+    ("dove",   "Dove sta",      130, "w", lambda r: r["dentro"],
+     lambda r: "nella cartella" if r["dentro"] else "fuori"),
+    ("letto",  "Letto",          95, "e", lambda r: r["letto"],
+     lambda r: cam.h_byte(r["letto"])),
+    ("peso",   "Peso del file", 115, "e", lambda r: r["peso"] or 0,
+     lambda r: cam.h_byte(r["peso"]) if r["peso"] is not None else "—"),
+    ("quanto", "Quanto",         80, "e",
+     lambda r: cam_flusso.quota(r["unico"], r["peso"] or 0) or 0,
+     lambda r: quota_txt(r["unico"], r["peso"] or 0)),
+]
+
+AIUTO_FILE = {
+    "nome": "File il cui contenuto è stato letto e spedito al modello. Il "
+            "percorso è relativo alla cartella di lavoro, intero se sta fuori.",
+    "letto": "Quanto contenuto del file è partito, sommando tutte le letture: "
+             "un file letto due volte conta due volte.",
+    "peso": "Quanto pesa il file adesso sul disco. «—» se nel frattempo è stato "
+            "cancellato o spostato.",
+    "quanto": "Quanta parte del file è partita almeno una volta. Non supera il "
+              "100% anche se è stato riletto.",
+}
 
 AIUTO_STRUMENTI = {
     "dove": "Sulla macchina: lo esegue Claude Code qui.\n"
@@ -2936,14 +2988,14 @@ class FlussoWindow(tk.Toplevel):
         self.t = app.t
         self.sid = sess["session_id"]
         self.title(f"{APP_TITLE} — {sess.get('project') or '?'} · {self.sid[:8]}")
-        self.geometry("1040x700")
+        self.geometry("1060x760")
         set_titlebar(self, self.t.mode == "dark")
 
         head = tk.Frame(self, bg=self.t["page"])
         head.pack(fill="x", padx=18, pady=(16, 10))
         self.l_title = tk.Label(head, text="", bg=self.t["page"], fg=self.t["ink"],
                                 font=self.t.f_title, anchor="w", justify="left",
-                                wraplength=980)
+                                wraplength=1000)
         self.l_title.pack(fill="x")
         self.l_meta = tk.Label(head, text="", bg=self.t["page"], fg=self.t["ink2"],
                                font=self.t.f_small, anchor="w", justify="left")
@@ -2952,42 +3004,69 @@ class FlussoWindow(tk.Toplevel):
         tiles = tk.Frame(self, bg=self.t["page"])
         tiles.pack(fill="x", padx=18)
         self.tiles = {}
-        for key, label in (("req", "Richieste"), ("tin", "Al modello"),
-                           ("nuovo", "Contenuto nuovo"), ("loc", "In locale"),
+        for key, label in (("inv", "Dati locali inviati"), ("file", "File inviati"),
+                           ("tratt", "Resta qui"), ("tin", "Token al modello"),
                            ("tempo", "Attesa del modello")):
-            tile = StatTile(tiles, self.t, label, width=190)
+            tile = StatTile(tiles, self.t, label, width=194)
             tile.pack(side="left", padx=(0, 10))
             self.tiles[key] = tile
 
-        def titolo(testo):
-            tk.Label(self, text=testo.upper(), bg=self.t["page"], fg=self.t["muted"],
-                     font=self.t.f_head, anchor="w").pack(fill="x", padx=18,
-                                                          pady=(14, 6))
+        bar = tk.Frame(self, bg=self.t["page"])
+        bar.pack(fill="x", padx=18, pady=(14, 0))
+        self.seg = Segmented(bar, self.t, ["File inviati", "Contenuto e strumenti"],
+                             self._on_view)
+        self.seg.pack(side="left")
+
+        # La nota si impacchetta prima delle viste, dal basso: le tabelle
+        # chiedono tutta l'altezza che possono e altrimenti la spingerebbero fuori.
+        self.l_nota = tk.Label(self, text="", bg=self.t["page"], fg=self.t["muted"],
+                               font=self.t.f_small, anchor="w", justify="left",
+                               wraplength=1020)
+        self.l_nota.pack(side="bottom", fill="x", padx=18, pady=(6, 12))
+
+        holder = tk.Frame(self, bg=self.t["page"])
+        holder.pack(fill="both", expand=True, padx=18, pady=(10, 0))
+
+        # -- vista 1: quali file sono partiti
+        self.v_file = tk.Frame(holder, bg=self.t["page"])
+        self.file_tbl = DataTable(self.v_file, self.t, FILE_COLUMNS)
+        self.file_tbl.help = AIUTO_FILE
+        self.file_tbl.pack(fill="both", expand=True)
+
+        # -- vista 2: di chi e' il contenuto, e cosa e' stato eseguito
+        self.v_flusso = tk.Frame(holder, bg=self.t["page"])
+
+        def titolo(testo, sopra=0):
+            tk.Label(self.v_flusso, text=testo.upper(), bg=self.t["page"],
+                     fg=self.t["muted"], font=self.t.f_head,
+                     anchor="w").pack(fill="x", pady=(sopra, 6))
 
         titolo("Cosa è partito verso il modello")
-        self.origini = DataTable(self, self.t, ORIGINE_COLUMNS,
+        self.origini = DataTable(self.v_flusso, self.t, ORIGINE_COLUMNS,
                                  share_key=lambda r: r["n"])
         self.origini.help = {"testo": AIUTO_ATTIVE["nuovo"]}
         self.origini.configure(height=self.origini.head_h
-                               + self.origini.row_h_base * len(cam_flusso.ORIGINI) + 6)
+                               + self.origini.row_h_base * (len(cam_flusso.ORIGINI) + 1)
+                               + 24)
         self.origini.pack_propagate(False)
-        self.origini.pack(fill="x", padx=18)
-
-        titolo("Cosa è stato eseguito, e dove")
-        self.strumenti = DataTable(self, self.t, STRUMENTO_COLUMNS,
-                                   share_key=None)
+        self.origini.pack(fill="x")
+        titolo("Cosa è stato eseguito, e dove", sopra=14)
+        self.strumenti = DataTable(self.v_flusso, self.t, STRUMENTO_COLUMNS)
         self.strumenti.help = AIUTO_STRUMENTI
-        # La nota si impacchetta prima della tabella, dal basso: la tabella
-        # chiede tutta l'altezza che puo' e altrimenti la spingerebbe fuori.
-        self.l_nota = tk.Label(self, text="", bg=self.t["page"], fg=self.t["muted"],
-                               font=self.t.f_small, anchor="w", justify="left",
-                               wraplength=1000)
-        self.l_nota.pack(side="bottom", fill="x", padx=18, pady=(6, 12))
-        self.strumenti.pack(fill="both", expand=True, padx=18)
+        self.strumenti.pack(fill="both", expand=True)
+
+        self.viste = (self.v_file, self.v_flusso)
+        self.corrente = self.v_file
+        self.v_file.pack(fill="both", expand=True)
 
         self.protocol("WM_DELETE_WINDOW", self._chiudi)
         app.flusso_windows[self.sid] = self
         self.set_data(sess)
+
+    def _on_view(self, index):
+        self.corrente.pack_forget()
+        self.corrente = self.viste[index]
+        self.corrente.pack(fill="both", expand=True)
 
     def _chiudi(self):
         self.app.flusso_windows.pop(self.sid, None)
@@ -2998,34 +3077,49 @@ class FlussoWindow(tk.Toplevel):
         f = sess["flusso"]
         tok = sess["tokens"]
         ok = f["misurato"]
+        cart = f.get("cartella")
         stato = {"busy": "sta lavorando", "idle": "aspetta te"}.get(sess.get("_status"))
         self.l_title.config(text=sess.get("title") or sess.get("first_prompt")
                             or self.sid[:8])
         self.l_meta.config(text="  ·  ".join(x for x in (
-            sess.get("project"), stato, f"ultima attività {Fmt.ago(sess.get('end'))}",
+            sess.get("cwd") or sess.get("project"), stato,
+            f"ultima attività {Fmt.ago(sess.get('end'))}",
             f"{sess.get('subagent_files') or 0} subagent"
             if sess.get("subagent_files") else None) if x))
 
-        self.tiles["req"].set(str(f["richieste"]) if ok else "—",
-                              f"ogni messaggio partito {f['ripetizione']:.0f} volte"
-                              if f.get("ripetizione") else "")
+        self.tiles["inv"].set(
+            cam.h_byte(f["inviato_locale"]),
+            (f"{quota_cartella_txt(f['quota_cartella'])} di una cartella da "
+             f"{cartella_txt(sess)}") if cart else "cartella di lavoro non trovata")
+        self.tiles["file"].set(
+            f"{f['file_dentro']} su {cart['file']}" if cart else str(f["file_dentro"]),
+            (f"{cam.h_byte(f['byte_dentro'])} · "
+             f"{quota_cartella_txt(f['copertura'])} della cartella"
+             if cart else cam.h_byte(f["byte_dentro"])))
+        self.tiles["tratt"].set(cam.h_byte(f["trattenuto"]),
+                                f"{f['esecuzioni_locali']} strumenti in locale")
         self.tiles["tin"].set(Fmt.tokens(cam.token_al_modello(tok)),
-                              f"{pct_txt(cam.cache_hit(tok))} dalla cache · "
-                              f"{Fmt.tokens(tok['output'])} usciti")
-        self.tiles["nuovo"].set(cam.h_byte(f["nuovo_totale"]) if ok else "—",
-                                f"{quota_txt(f['nuovo']['strumenti'], f['nuovo_totale'])} "
-                                "da strumenti" if ok else "richieste non registrate")
-        self.tiles["loc"].set(f"{f['esecuzioni_locali']}",
-                              f"resta qui {cam.h_byte(f['trattenuto'])}")
+                              (f"{f['richieste']} richieste · " if ok else "")
+                              + f"{pct_txt(cam.cache_hit(tok))} dalla cache")
         self.tiles["tempo"].set(Fmt.dur(f["tempo_modello"]) if ok else "—",
                                 f"negli strumenti {Fmt.dur(f['tempo_strumenti'])}")
+
+        if f["file_letti"]:
+            self.file_tbl.set_rows(f["file_letti"], {
+                "nome": f"{len(f['file_letti'])} file",
+                "letto": cam.h_byte(sum(r["letto"] for r in f["file_letti"])),
+            })
+        else:
+            self.file_tbl.set_placeholder("nessun file letto finora")
 
         self.origini.set_rows([
             {"etichetta": (cam_flusso.ETICHETTA_ORIGINE[k][:1].upper()
                            + cam_flusso.ETICHETTA_ORIGINE[k][1:]),
              "n": f["nuovo"][k],
              "testo": cam.h_byte(f["nuovo"][k]) if ok or k != "harness" else "—"}
-            for k in cam_flusso.ORIGINI])
+            for k in cam_flusso.ORIGINI],
+            {"origine": "Contenuto spedito per la prima volta",
+             "testo": cam.h_byte(f["nuovo_totale"]) if ok else "—"})
         if f["strumenti"]:
             self.strumenti.set_rows(f["strumenti"], {
                 "nome": f"{len(f['strumenti'])} strumenti",
@@ -3036,13 +3130,16 @@ class FlussoWindow(tk.Toplevel):
             })
         else:
             self.strumenti.set_placeholder("nessuno strumento eseguito finora")
-        self.l_nota.config(text=(
-            "Token esatti, dalle risposte dell'API. Il contenuto è in caratteri di "
-            "testo: dice di che cosa è fatto quello che parte."
-            if ok else
-            "Questo transcript è di un Claude Code precedente alla 2.1.309, che non "
-            "registrava le richieste: manca quello che Claude Code aggiunge per conto "
-            "suo (istruzioni, strumenti, promemoria) e il tempo di attesa del modello."))
+        nota = ("«Dati locali inviati» è tutto quello che gli strumenti eseguiti sulla "
+                "macchina hanno girato al modello, output dei comandi compresi. «File "
+                "inviati» conta le sole letture dirette, ogni file una volta.")
+        if cart and cart["parziale"]:
+            nota += (" La cartella è troppo grande: il suo peso è contato solo in "
+                     "parte, quindi le quote sono sovrastimate.")
+        if not ok:
+            nota += (" Transcript precedente alla 2.1.309: manca quello che Claude "
+                     "Code aggiunge per conto suo e il tempo di attesa del modello.")
+        self.l_nota.config(text=nota)
 
 
 class PersonWindow(tk.Toplevel):
